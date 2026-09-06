@@ -1,0 +1,51 @@
+name: Auto Sync Recycling Prices to Data
+
+on:
+  schedule:
+    # 每天 UTC 00:30 (北京时间 08:30) 定时抓取更新
+    - cron: '30 0 * * *'
+  workflow_dispatch: # 支持你在 GitHub 网页上点击“Run workflow”手动立刻更新
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # 关键：授予机器人向仓库推代码的写权限
+
+    steps:
+      - name: 检出当前仓库代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装爬虫依赖
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: 执行价格抓取并更新 data 目录
+        run: |
+          python update_prices.py
+
+      - name: 检查是否有数据更新并提交
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 将 data 目录下的改动暂存
+          git add data/
+          
+          # 检查是否有文件改动
+          if git diff --staged --quiet; then
+            echo "今日价格无变动，无需更新。"
+          else
+            echo "检测到最新报价，正在提交到 main 分支..."
+            git commit -m "Auto: 自动同步数码回收网最新价格数据 [$(date +'%Y-%m-%d')]"
+            git push origin main
+          fi
