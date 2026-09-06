@@ -1,17 +1,15 @@
 name: 自动编译并发布 EXE 工具
 
 on:
-  # 方式1：只要您在本地打了以 v 开头的 tag (如 v1.0) 并推送，自动触发打包
   push:
     tags:
       - 'v*'
-  # 方式2：支持在 GitHub 网页上手动点按钮随时一键打包
   workflow_dispatch:
     inputs:
       version_tag:
-        description: '发布版本号 (如 v1.0)'
+        description: '发布版本号 (如 v1.0.1)'
         required: true
-        default: 'v1.0'
+        default: 'v1.0.1'
 
 jobs:
   build-windows:
@@ -23,31 +21,63 @@ jobs:
       - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 2. 安装 Python 环境
+      - name: 2. 配置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 3. 安装 PyInstaller 打包工具
+      - name: 3. 安装打包工具
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
 
-      - name: 4. 云端编译为 Windows EXE
+      - name: 4. 编译 Windows EXE
         run: |
           pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
 
-      - name: 5. 组装绿色免安装压缩包 (包含 EXE 和外部 data 文件夹)
+      - name: 5. 组装并压缩 (使用 Python 确保中文文件名 100% 不乱码不丢失)
         run: |
-          # 创建独立分发文件夹
-          mkdir PhoneSearch_App
-          copy dist\手机回收价格秒查工具.exe PhoneSearch_App\
-          xcopy /E /I data PhoneSearch_App\data
-          
-          # 压缩为 zip
-          tar -a -c -f PhoneSearch_Windows.zip PhoneSearch_App
+          python -c "
+          import os, shutil, zipfile
 
-      - name: 6. 自动发布到 GitHub Release
+          app_dir = 'PhoneSearch_App'
+          zip_name = 'PhoneSearch_Windows.zip'
+
+          # 1. 创建干净的打包文件夹
+          if os.path.exists(app_dir):
+              shutil.rmtree(app_dir)
+          os.makedirs(os.path.join(app_dir, 'data'), exist_ok=True)
+
+          # 2. 拷贝 exe 程序
+          exe_src = os.path.join('dist', '手机回收价格秒查工具.exe')
+          if os.path.exists(exe_src):
+              shutil.copy2(exe_src, os.path.join(app_dir, '手机回收价格秒查工具.exe'))
+              print('✅ 已复制主程序 EXE')
+
+          # 3. 完整拷贝 data 目录下的所有 CSV 文件 (Unicode 安全通道)
+          data_src = 'data'
+          file_count = 0
+          if os.path.exists(data_src):
+              for file in os.listdir(data_src):
+                  if file.lower().endswith('.csv'):
+                      src_file = os.path.join(data_src, file)
+                      dst_file = os.path.join(app_dir, 'data', file)
+                      shutil.copy2(src_file, dst_file)
+                      file_count += 1
+                      print(f'-> 已复制表格: {file}')
+          print(f'✅ data 文件夹复制完成，共复制 {file_count} 个 CSV 表格')
+
+          # 4. 生成标准 UTF-8 编码的 ZIP 压缩包
+          with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+              for root, dirs, files in os.walk(app_dir):
+                  for f in files:
+                      full_path = os.path.join(root, f)
+                      rel_path = os.path.relpath(full_path, '.')
+                      zf.write(full_path, rel_path)
+          print('🎉 PhoneSearch_Windows.zip 打包生成成功！')
+          "
+
+      - name: 6. 自动更新/发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version_tag || github.ref_name }}
@@ -58,7 +88,8 @@ jobs:
           body: |
             ### 📱 手机回收价格秒查工具 (免安装绿色版)
             
-            #### 🚀 使用方法：
-            1. 下载下方的 `PhoneSearch_Windows.zip` 压缩包并解压；
-            2. 双击运行 `手机回收价格秒查工具.exe` 即可使用；
-            3. 数据表格存放在解压后的 `data` 文件夹内，后续更新 CSV 放入即可生效，无需重复安装。
+            #### 🚀 使用说明：
+            1. 下载下方的 `PhoneSearch_Windows.zip` 并解压；
+            2. 外部 `data` 文件夹包含全部品牌的 CSV 价格表格，中文名称已全部恢复；
+            3. 双击运行 `手机回收价格秒查工具.exe` 即可开启秒查；
+            4. 后续更新价格只需将新的 CSV 表格放入解压后的 `data` 文件夹内点击“刷新”即可。
