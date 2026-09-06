@@ -1,0 +1,38 @@
+name: Build Windows App
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 安装 Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: 安装 PyInstaller
+      run: pip install pyinstaller
+
+    - name: 打包成 EXE
+      run: |
+        pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
+
+    - name: 归档 EXE 与数据目录
+      run: |
+        mkdir release_package
+        copy dist\手机回收价格秒查工具.exe release_package\
+        xcopy /E /I data release_package\data
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: PhonePriceSearchApp-Windows
+        path: release_package/
