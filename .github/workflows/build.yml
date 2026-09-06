@@ -1,4 +1,4 @@
-name: Build Windows App
+name: Build Release Package
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
-    - name: 安装 Python
+    - name: 配置 Python 环境
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
@@ -21,18 +21,20 @@ jobs:
     - name: 安装 PyInstaller
       run: pip install pyinstaller
 
-    - name: 打包成 EXE
+    - name: 编译纯 EXE 程序 (不包含 CSV)
       run: |
         pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
 
-    - name: 归档 EXE 与数据目录
+    - name: 组装分发目录结构
       run: |
         mkdir release_package
+        # 复制纯 exe 文件
         copy dist\手机回收价格秒查工具.exe release_package\
+        # 复制外部数据目录（保持独立分离）
         xcopy /E /I data release_package\data
 
-    - name: 上传构建产物
+    - name: 上传构建产物 (ZIP 格式)
       uses: actions/upload-artifact@v4
       with:
-        name: PhonePriceSearchApp-Windows
+        name: 手机回收价格秒查工具_完整包
         path: release_package/
