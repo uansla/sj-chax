@@ -1,11 +1,12 @@
 import csv
 import glob
 import os
+import subprocess
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
-# 开启 Windows 高 DPI 清晰度支持
+# 开启 Windows 高 DPI 清晰度，防止界面发虚
 try:
     from ctypes import windll
 
@@ -14,10 +15,12 @@ except Exception:
     pass
 
 
-def get_app_dir():
-    """获取程序所在的真实绝对路径（兼顾源码运行和 PyInstaller 打包运行）"""
+def get_base_dir():
+    """获取程序所在的真实外部物理路径（即使打包为 exe 也指向 exe 所在的外部目录，而非临时解压目录）"""
     if getattr(sys, "frozen", False):
+        # 运行 exe 时，定位到 exe 自身所在的文件夹
         return os.path.dirname(sys.executable)
+    # 源码运行时，定位到 py 脚本所在文件夹
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -25,15 +28,20 @@ class PhonePriceSearchApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("📱 手机回收价格秒查工具")
+        self.root.title("📱 手机回收价格秒查工具 (外部数据独立版)")
         self.root.geometry("1150x680")
         self.root.minsize(850, 500)
 
-        # 确定数据目录优先级：程序目录下的 data 文件夹 -> 程序所在根目录
-        self.base_dir = get_app_dir()
+        # 强制指定外部 data 目录
+        self.base_dir = get_base_dir()
         self.data_dir = os.path.join(self.base_dir, "data")
+
+        # 若外部不存在 data 文件夹则自动创建
         if not os.path.exists(self.data_dir):
-            self.data_dir = self.base_dir
+            try:
+                os.makedirs(self.data_dir, exist_ok=True)
+            except Exception:
+                pass
 
         self.all_data = []
         self.sort_column = None
@@ -57,7 +65,7 @@ class PhonePriceSearchApp:
             top_frame,
             textvariable=self.search_var,
             font=("微软雅黑", 10),
-            width=28,
+            width=26,
         )
         self.search_entry.pack(side=tk.LEFT, padx=5)
         self.search_entry.focus()
@@ -67,15 +75,15 @@ class PhonePriceSearchApp:
         )
         clear_btn.pack(side=tk.LEFT, padx=3)
 
-        # 路径选择与重载按钮
+        # 右侧操作区
         btn_box = ttk.Frame(top_frame)
         btn_box.pack(side=tk.RIGHT)
 
         ttk.Button(
-            btn_box, text="📂 切换数据文件夹", command=self.choose_data_dir
+            btn_box, text="📂 打开 data 文件夹", command=self.open_data_folder
         ).pack(side=tk.LEFT, padx=3)
         ttk.Button(
-            btn_box, text="🔄 刷新数据", command=self.load_all_csv_files
+            btn_box, text="🔄 刷新表格数据", command=self.load_all_csv_files
         ).pack(side=tk.LEFT, padx=3)
 
         # 2. 中部数据表格
@@ -83,14 +91,14 @@ class PhonePriceSearchApp:
         table_frame.pack(fill=tk.BOTH, expand=True)
 
         self.columns = [
-            ("source", "品牌/表格来源", 130),
+            ("source", "品牌/表格来源", 120),
             ("series", "系列", 100),
             ("model", "型号", 180),
             ("price_good", "开机屏好/靓好", 100),
             ("price_screen_bad", "开机屏坏", 90),
             ("price_no_power", "不开机", 90),
             ("price_junk", "废板/整机", 90),
-            ("remark", "关键备注 (可双击展开)", 300),
+            ("remark", "关键备注 (可双击展开)", 310),
         ]
 
         self.tree = ttk.Treeview(
@@ -139,32 +147,30 @@ class PhonePriceSearchApp:
         )
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
-    def choose_data_dir(self):
-        """支持手动指定存放 CSV 的文件夹"""
-        chosen = filedialog.askdirectory(
-            initialdir=self.data_dir, title="选择存放回收报价CSV的文件夹"
-        )
-        if chosen:
-            self.data_dir = chosen
-            self.load_all_csv_files()
+    def open_data_folder(self):
+        """一键在操作系统中打开外部 data 文件夹，方便放新表格"""
+        if not os.path.exists(self.data_dir):
+            os.makedirs(self.data_dir, exist_ok=True)
+
+        if sys.platform == "win32":
+            os.startfile(self.data_dir)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", self.data_dir])
+        else:
+            subprocess.Popen(["xdg-open", self.data_dir])
 
     def load_all_csv_files(self):
-        """自动扫描并载入指定文件夹下的所有 .csv 文件"""
+        """从外部 data 目录扫描所有 CSV 文件并读取"""
         self.all_data.clear()
 
-        # 查找目标文件夹中的所有 CSV 文件
         pattern = os.path.join(self.data_dir, "*.csv")
         csv_files = glob.glob(pattern)
-
-        # 如果选中的目录没有，再回退查找当前脚本同级目录
-        if not csv_files and self.data_dir != self.base_dir:
-            csv_files = glob.glob(os.path.join(self.base_dir, "*.csv"))
 
         if not csv_files:
             for item in self.tree.get_children():
                 self.tree.delete(item)
             self.status_var.set(
-                f"⚠️ 在 '{self.data_dir}' 未找到任何 CSV 报价表文件，请放入表格后点击刷新。"
+                f"⚠️ 在外部目录 [{self.data_dir}] 未找到任何 CSV 文件！请点击上方“打开 data 文件夹”放入表格后刷新。"
             )
             return
 
@@ -185,8 +191,7 @@ class PhonePriceSearchApp:
                     with open(
                         file_path, "r", encoding=enc, errors="strict"
                     ) as f:
-                        reader = csv.DictReader(f)
-                        file_content = list(reader)
+                        file_content = list(csv.DictReader(f))
                         break
                 except (UnicodeDecodeError, Exception):
                     continue
@@ -195,7 +200,7 @@ class PhonePriceSearchApp:
                 continue
 
             for row in file_content:
-                # 兼容多种不同品牌的表头字段
+                # 兼容各品牌特殊字段名
                 model = (
                     row.get("型号")
                     or row.get("品名/型号")
@@ -246,12 +251,11 @@ class PhonePriceSearchApp:
             loaded_files += 1
 
         self.status_var.set(
-            f"✅ 成功从 [{self.data_dir}] 载入 {loaded_files} 个文件，共计 {len(self.all_data)} 条机型价格数据。"
+            f"✅ 成功从外部 data 目录载入 {loaded_files} 个文件，共 {len(self.all_data)} 条机型数据。（双击行可查全量报价细则）"
         )
         self.do_search()
 
     def do_search(self):
-        """实时高效模糊匹配"""
         query = (
             self.search_var.get()
             .strip()
@@ -265,7 +269,6 @@ class PhonePriceSearchApp:
 
         matches = 0
         for item in self.all_data:
-            # 搜索时将型号、系列、来源拼接后做全字符串模糊对比
             search_str = (
                 (item["model"] + item["series"] + item["source"])
                 .lower()
@@ -292,18 +295,16 @@ class PhonePriceSearchApp:
 
         if query:
             self.status_var.set(
-                f"🔍 关键词 '{self.search_var.get().strip()}'：找到 {matches} 个匹配机型 (双击行查看特例细则)"
+                f"🔍 关键词 '{self.search_var.get().strip()}'：找到 {matches} 个匹配结果"
             )
 
     def sort_by_column(self, col):
-        """点击表头进行排序"""
         if self.sort_column == col:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_reverse = False
             self.sort_column = col
 
-        # 尝试按数值排序，若不能转成数字则按字符串排序
         def sort_key(item):
             val = item.get(col, "")
             try:
@@ -315,7 +316,6 @@ class PhonePriceSearchApp:
         self.do_search()
 
     def show_detail(self, event):
-        """双击弹窗显示完整配置及扣款明细（比如苹果无ID、三星微老化档位等）"""
         selected = self.tree.selection()
         if not selected:
             return
@@ -336,7 +336,7 @@ class PhonePriceSearchApp:
             return
 
         win = tk.Toplevel(self.root)
-        win.title(f"报价与质检明细 - {model_name}")
+        win.title(f"报价与质检细则 - {model_name}")
         win.geometry("540x450")
         win.transient(self.root)
 
@@ -359,7 +359,7 @@ class PhonePriceSearchApp:
                 text_box.insert(tk.END, f"• {k.ljust(15)} :  {v}\n")
 
         text_box.configure(state="disabled")
-        ttk.Button(frame, text="确定", command=win.destroy).pack(pady=10)
+        ttk.Button(frame, text="关闭", command=win.destroy).pack(pady=10)
 
 
 if __name__ == "__main__":
