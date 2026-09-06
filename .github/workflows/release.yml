@@ -1,44 +1,64 @@
-name: Auto Create Release on Tag
+name: 自动编译并发布 EXE 工具
 
 on:
+  # 方式1：只要您在本地打了以 v 开头的 tag (如 v1.0) 并推送，自动触发打包
   push:
     tags:
-      - 'v*' # 只要 push 的 tag 是以 v 开头 (如 v1.0, v1.0.1) 就自动触发
+      - 'v*'
+  # 方式2：支持在 GitHub 网页上手动点按钮随时一键打包
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: '发布版本号 (如 v1.0)'
+        required: true
+        default: 'v1.0'
 
 jobs:
-  build-and-release:
+  build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
 
     steps:
-      - name: 检出代码
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: 2. 安装 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 安装 PyInstaller
-        run: pip install pyinstaller
+      - name: 3. 安装 PyInstaller 打包工具
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
 
-      - name: 编译 EXE
+      - name: 4. 云端编译为 Windows EXE
         run: |
           pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
 
-      - name: 打包分发文件 (EXE + data 目录)
+      - name: 5. 组装绿色免安装压缩包 (包含 EXE 和外部 data 文件夹)
         run: |
-          mkdir PhoneSearchApp
-          copy dist\手机回收价格秒查工具.exe PhoneSearchApp\
-          xcopy /E /I data PhoneSearchApp\data
-          tar -a -c -f PhoneSearch_${{ github.ref_name }}_Windows.zip PhoneSearchApp
+          # 创建独立分发文件夹
+          mkdir PhoneSearch_App
+          copy dist\手机回收价格秒查工具.exe PhoneSearch_App\
+          xcopy /E /I data PhoneSearch_App\data
+          
+          # 压缩为 zip
+          tar -a -c -f PhoneSearch_Windows.zip PhoneSearch_App
 
-      - name: 创建 GitHub Release 并上传 ZIP
+      - name: 6. 自动发布到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: PhoneSearch_${{ github.ref_name }}_Windows.zip
-          name: 手机回收价格秒查工具 ${{ github.ref_name }}
+          tag_name: ${{ github.event.inputs.version_tag || github.ref_name }}
+          name: 手机回收价格秒查工具 ${{ github.event.inputs.version_tag || github.ref_name }}
+          files: PhoneSearch_Windows.zip
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: |
+            ### 📱 手机回收价格秒查工具 (免安装绿色版)
+            
+            #### 🚀 使用方法：
+            1. 下载下方的 `PhoneSearch_Windows.zip` 压缩包并解压；
+            2. 双击运行 `手机回收价格秒查工具.exe` 即可使用；
+            3. 数据表格存放在解压后的 `data` 文件夹内，后续更新 CSV 放入即可生效，无需重复安装。
