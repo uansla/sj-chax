@@ -1,0 +1,44 @@
+name: Auto Create Release on Tag
+
+on:
+  push:
+    tags:
+      - 'v*' # 只要 push 的 tag 是以 v 开头 (如 v1.0, v1.0.1) 就自动触发
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装 PyInstaller
+        run: pip install pyinstaller
+
+      - name: 编译 EXE
+        run: |
+          pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
+
+      - name: 打包分发文件 (EXE + data 目录)
+        run: |
+          mkdir PhoneSearchApp
+          copy dist\手机回收价格秒查工具.exe PhoneSearchApp\
+          xcopy /E /I data PhoneSearchApp\data
+          tar -a -c -f PhoneSearch_${{ github.ref_name }}_Windows.zip PhoneSearchApp
+
+      - name: 创建 GitHub Release 并上传 ZIP
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PhoneSearch_${{ github.ref_name }}_Windows.zip
+          name: 手机回收价格秒查工具 ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
