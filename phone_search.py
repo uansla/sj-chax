@@ -9,7 +9,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
-# 尝试支持 openpyxl (用于直接读取/写入 Excel .xlsx)
+# Optional Excel support
 try:
     import openpyxl
 
@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
-# 开启 Windows 高 DPI 适配
+# Enable High DPI awareness on Windows
 try:
     from ctypes import windll
 
@@ -25,38 +25,35 @@ try:
 except Exception:
     pass
 
+# Brand synonyms mapping (bilingual support)
 BRAND_SYNONYMS = {
-    "小米": ["小米", "xiaomi", "红米", "redmi", "mi"],
-    "红米": ["红米", "redmi", "小米", "xiaomi"],
-    "苹果": ["苹果", "apple", "iphone", "ipad"],
-    "华为": ["华为", "huawei"],
-    "荣耀": ["荣耀", "honor"],
-    "一加": ["一加", "oneplus", "1+"],
-    "真我": ["真我", "realme"],
-    "红魔": ["红魔", "redmagic", "努比亚", "nubia"],
-    "努比亚": ["努比亚", "nubia", "红魔", "redmagic"],
-    "谷歌": ["谷歌", "google", "pixel"],
-    "摩托": ["摩托", "motorola", "moto"],
-    "诺基亚": ["诺基亚", "nokia"],
-    "三星": ["三星", "samsung", "galaxy"],
-    "魅族": ["魅族", "meizu", "魅蓝"],
-    "魅蓝": ["魅蓝", "魅族", "meizu"],
-    "金立": ["金立", "gionee"],
-    "酷派": ["酷派", "coolpad", "ivvi"],
-    "中兴": ["中兴", "zte", "axon", "blade", "远航", "天机"],
-    "步步高": ["步步高", "imoo"],
-    "海信": ["海信", "hisense"],
-    "华硕": ["华硕", "asus", "rog", "zenfone"],
-    "美图": ["美图", "meitu"],
-    "格力": ["格力", "gree"],
-    "锤子": ["锤子", "坚果", "smartisan"],
-    "坚果": ["坚果", "锤子", "smartisan"],
-    "糖果": ["糖果", "sugar"],
-    "国美": ["国美", "gome"],
-    "联想": ["联想", "lenovo", "拯救者", "zuk", "乐檬"],
-    "拯救者": ["拯救者", "lenovo", "联想"],
-    "乐视": ["乐视", "letv", "leeco"],
-    "移动": ["中国移动", "移动", "chinamobile"],
+    "xiaomi": ["xiaomi", "redmi", "mi", "小米", "红米"],
+    "redmi": ["redmi", "xiaomi", "红米", "小米"],
+    "apple": ["apple", "iphone", "ipad", "苹果"],
+    "huawei": ["huawei", "华为"],
+    "honor": ["honor", "荣耀"],
+    "oneplus": ["oneplus", "1+", "一加"],
+    "realme": ["realme", "真我"],
+    "nubia": ["nubia", "redmagic", "努比亚", "红魔"],
+    "google": ["google", "pixel", "谷歌"],
+    "motorola": ["motorola", "moto", "摩托"],
+    "nokia": ["nokia", "诺基亚"],
+    "samsung": ["samsung", "galaxy", "三星"],
+    "meizu": ["meizu", "魅族", "魅蓝"],
+    "gionee": ["gionee", "金立"],
+    "coolpad": ["coolpad", "ivvi", "酷派"],
+    "zte": ["zte", "axon", "blade", "中兴", "远航", "天机"],
+    "imoo": ["imoo", "步步高"],
+    "hisense": ["hisense", "海信"],
+    "asus": ["asus", "rog", "zenfone", "华硕"],
+    "meitu": ["meitu", "美图"],
+    "gree": ["gree", "格力"],
+    "smartisan": ["smartisan", "锤子", "坚果"],
+    "sugar": ["sugar", "糖果"],
+    "gome": ["gome", "国美"],
+    "lenovo": ["lenovo", "拯救者", "zuk", "联想"],
+    "letv": ["letv", "leeco", "乐视"],
+    "chinamobile": ["chinamobile", "移动", "中国移动"],
 }
 
 
@@ -76,9 +73,9 @@ class PhonePriceSearchApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("📱 手机回收价格系统 (变动标记 + 批量对账核价版)")
-        self.root.geometry("1200x720")
-        self.root.minsize(900, 550)
+        self.root.title("Phone Price Search Tool (Standalone Edition)")
+        self.root.geometry("1180x700")
+        self.root.minsize(880, 520)
 
         self.base_dir = get_base_dir()
         self.data_dir = os.path.join(self.base_dir, "data")
@@ -96,72 +93,64 @@ class PhonePriceSearchApp:
         self.load_all_data()
 
     def _setup_ui(self):
-        # 顶部搜索与操作栏
+        # 1. Top Search Bar
         top_frame = ttk.Frame(self.root, padding=(12, 10))
         top_frame.pack(fill=tk.X)
 
         ttk.Label(
             top_frame,
-            text="🔍 搜索 (如: 小米 8 / 苹果 13)：",
-            font=("微软雅黑", 10, "bold"),
+            text="Search (e.g. Xiaomi 8 / iPhone 13):",
+            font=("Segoe UI", 10, "bold"),
         ).pack(side=tk.LEFT)
 
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *args: self.do_search())
         self.search_entry = ttk.Entry(
-            top_frame,
-            textvariable=self.search_var,
-            font=("微软雅黑", 10),
-            width=24,
+            top_frame, textvariable=self.search_var, font=("Segoe UI", 10), width=26
         )
-        self.search_entry.pack(side=tk.LEFT, padx=5)
+        self.search_entry.pack(side=tk.LEFT, padx=6)
 
         clear_btn = ttk.Button(
-            top_frame, text="清空", command=lambda: self.search_var.set("")
+            top_frame, text="Clear", command=lambda: self.search_var.set("")
         )
-        clear_btn.pack(side=tk.LEFT, padx=2)
+        clear_btn.pack(side=tk.LEFT, padx=3)
 
-        # 变动筛选框
         self.only_changed_var = tk.BooleanVar(value=False)
-        self.only_changed_var.trace_add(
-            "write", lambda *args: self.do_search()
-        )
+        self.only_changed_var.trace_add("write", lambda *args: self.do_search())
         ttk.Checkbutton(
             top_frame,
-            text="🔥 只看价格有变动的机型",
+            text="Show Price Changes Only",
             variable=self.only_changed_var,
         ).pack(side=tk.LEFT, padx=12)
 
-        # 功能操作区
+        # Right Action Buttons
         btn_box = ttk.Frame(top_frame)
         btn_box.pack(side=tk.RIGHT)
 
         ttk.Button(
-            btn_box,
-            text="📋 批量导入清单自动核价",
-            command=self.batch_price_inventory,
+            btn_box, text="Batch Inventory Match", command=self.batch_price_inventory
         ).pack(side=tk.LEFT, padx=3)
         ttk.Button(
-            btn_box, text="📂 打开 data", command=self.open_data_folder
+            btn_box, text="Open data/ Folder", command=self.open_data_folder
         ).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_box, text="🔄 刷新", command=self.load_all_data).pack(
-            side=tk.LEFT, padx=3
-        )
+        ttk.Button(
+            btn_box, text="Refresh", command=self.load_all_data
+        ).pack(side=tk.LEFT, padx=3)
 
-        # 中部表格区
+        # 2. Main Data Table
         table_frame = ttk.Frame(self.root, padding=(10, 0, 10, 5))
         table_frame.pack(fill=tk.BOTH, expand=True)
 
         self.columns = [
-            ("source", "品牌/来源", 110),
-            ("series", "系列", 90),
-            ("model", "型号 / 版本", 190),
-            ("price_good", "开机屏好/靓好", 110),
-            ("price_screen_bad", "开机屏坏", 90),
-            ("price_no_power", "不开机", 80),
-            ("price_junk", "废板/整机", 80),
-            ("fluctuation", "价格动态 / 变动", 130),
-            ("remark", "关键备注 (可双击展开)", 260),
+            ("source", "Brand / File", 110),
+            ("series", "Series", 90),
+            ("model", "Model / Edition", 210),
+            ("price_good", "Screen Good", 100),
+            ("price_screen_bad", "Screen Broken", 95),
+            ("price_no_power", "No Power", 85),
+            ("price_junk", "Scrap / Board", 85),
+            ("fluctuation", "Price Trend", 140),
+            ("remark", "Remarks (Double-click)", 260),
         ]
 
         self.tree = ttk.Treeview(
@@ -179,16 +168,11 @@ class PhonePriceSearchApp:
             )
             self.tree.column(col_id, width=width, anchor=tk.W)
 
-        # 配置涨价/跌价的颜色标签
-        self.tree.tag_configure("price_up", foreground="#d90429")  # 红色标涨
-        self.tree.tag_configure("price_down", foreground="#2a9d8f")  # 绿色标跌
+        self.tree.tag_configure("price_up", foreground="#d90429")
+        self.tree.tag_configure("price_down", foreground="#2a9d8f")
 
-        vsb = ttk.Scrollbar(
-            table_frame, orient=tk.VERTICAL, command=self.tree.yview
-        )
-        hsb = ttk.Scrollbar(
-            table_frame, orient=tk.HORIZONTAL, command=self.tree.xview
-        )
+        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -200,15 +184,15 @@ class PhonePriceSearchApp:
 
         self.tree.bind("<Double-1>", self.show_detail)
 
-        # 底部状态栏
-        self.status_var = tk.StringVar(value="准备就绪")
+        # 3. Status Bar
+        self.status_var = tk.StringVar(value="Ready")
         status_bar = ttk.Label(
             self.root,
             textvariable=self.status_var,
             relief=tk.SUNKEN,
             anchor=tk.W,
             padding=(8, 4),
-            font=("微软雅黑", 9),
+            font=("Segoe UI", 9),
         )
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
 
@@ -223,11 +207,9 @@ class PhonePriceSearchApp:
             subprocess.Popen(["xdg-open", self.data_dir])
 
     def load_all_data(self):
-        """加载 CSV 数据与价格变动历史库"""
         self.all_data.clear()
         self.price_history.clear()
 
-        # 加载价格变动日志
         if os.path.exists(self.history_file):
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
@@ -240,7 +222,7 @@ class PhonePriceSearchApp:
             for item in self.tree.get_children():
                 self.tree.delete(item)
             self.status_var.set(
-                f"⚠️ 外部目录 [{self.data_dir}] 未找到任何 CSV 价格表！"
+                f"Warning: No CSV files found in '{self.data_dir}'. Please add CSV files and click Refresh."
             )
             return
 
@@ -258,9 +240,7 @@ class PhonePriceSearchApp:
             file_content = None
             for enc in encodings:
                 try:
-                    with open(
-                        file_path, "r", encoding=enc, errors="strict"
-                    ) as f:
+                    with open(file_path, "r", encoding=enc, errors="strict") as f:
                         file_content = list(csv.DictReader(f))
                         break
                 except Exception:
@@ -272,17 +252,17 @@ class PhonePriceSearchApp:
             for row in file_content:
                 model = (
                     row.get("型号")
+                    or row.get("Model")
                     or row.get("品名/型号")
                     or row.get("Google")
                     or row.get("诺基亚")
                     or row.get("点数")
-                    or row.get("糖果")
-                    or row.get("国美")
                     or row.get("点数系列")
-                    or "未知型号"
+                    or "Unknown"
                 ).strip()
                 series = (
                     row.get("系列")
+                    or row.get("Series")
                     or row.get("品牌/系列")
                     or row.get("分类")
                     or file_name
@@ -304,9 +284,8 @@ class PhonePriceSearchApp:
                 p_junk = (
                     row.get("废板-整机") or row.get("深板·整机") or "-"
                 ).strip()
-                remark = (row.get("备注") or "").strip()
+                remark = (row.get("备注") or row.get("Remarks") or "").strip()
 
-                # 匹配价格变动标签
                 key = f"{file_name}_{model}"
                 history_info = self.price_history.get(key)
                 fluctuation = "-"
@@ -316,10 +295,10 @@ class PhonePriceSearchApp:
                     old_p = history_info.get("old_price", "")
                     diff = history_info.get("diff", 0)
                     if diff > 0:
-                        fluctuation = f"🔴 涨 {diff} (旧:{old_p})"
+                        fluctuation = f"UP +{diff} (Old: {old_p})"
                         change_tag = "price_up"
                     elif diff < 0:
-                        fluctuation = f"🟢 跌 {abs(diff)} (旧:{old_p})"
+                        fluctuation = f"DOWN -{abs(diff)} (Old: {old_p})"
                         change_tag = "price_down"
 
                 self.all_data.append(
@@ -341,7 +320,7 @@ class PhonePriceSearchApp:
 
         changed_count = sum(1 for x in self.all_data if x["change_tag"])
         self.status_var.set(
-            f"✅ 载入 {loaded_files} 个表格，共 {len(self.all_data)} 条数据。其中检测到 {changed_count} 款机型价格有更新！"
+            f"Loaded {loaded_files} files, {len(self.all_data)} models total. {changed_count} models have recent price updates."
         )
         self.do_search()
 
@@ -369,7 +348,7 @@ class PhonePriceSearchApp:
             c_remark = clean_text(item["remark"])
             c_brand_scope = f"{c_source} {c_series}"
 
-            # 1. 品牌范围匹配
+            # Brand scope filter
             if brand_terms:
                 brand_matched = False
                 for _, syn_list in brand_terms:
@@ -382,7 +361,7 @@ class PhonePriceSearchApp:
                 if not brand_matched:
                     continue
 
-            # 2. 型号多版本包容匹配
+            # Model & variant matching
             model_matched = True
             score = 0
             for m_term in model_terms:
@@ -443,35 +422,33 @@ class PhonePriceSearchApp:
             t_clean = clean_text(t)
             is_brand = False
             for brand_key, syns in BRAND_SYNONYMS.items():
-                if t_clean in [clean_text(x) for x in syns]:
-                    brand_terms.append((t_clean, [clean_text(x) for x in syns]))
+                clean_syns = [clean_text(x) for x in syns]
+                if t_clean in clean_syns:
+                    brand_terms.append((t_clean, clean_syns))
                     is_brand = True
                     break
             if not is_brand:
                 model_terms.append(t_clean)
         return brand_terms, model_terms
 
-    # ==================== 功能三：废旧手机清单批量核价 ====================
     def batch_price_inventory(self):
-        """导入用户自己的旧手机表格 (Excel / CSV)，自动逐行对账并导出估价结果"""
         file_path = filedialog.askopenfilename(
-            title="选择您的废旧手机清单表格",
+            title="Select Used Phone Inventory File",
             filetypes=[
-                ("表格文件", "*.xlsx *.xls *.csv"),
-                ("Excel表格", "*.xlsx *.xls"),
-                ("CSV表格", "*.csv"),
+                ("Spreadsheet Files", "*.xlsx *.xls *.csv"),
+                ("Excel Files", "*.xlsx *.xls"),
+                ("CSV Files", "*.csv"),
             ],
         )
         if not file_path:
             return
 
         rows = []
-        # 读取输入清单
         if file_path.lower().endswith((".xlsx", ".xls")):
             if not HAS_OPENPYXL:
                 messagebox.showerror(
-                    "缺少依赖",
-                    "处理 Excel (.xlsx) 需要安装 openpyxl 库。\n请在终端执行：pip install openpyxl\n或者将表格先另存为 CSV 格式即可直接导入！",
+                    "Missing openpyxl",
+                    "To read Excel files (.xlsx), please run:\npip install openpyxl\nOr save your spreadsheet as CSV and import again.",
                 )
                 return
             wb = openpyxl.load_workbook(file_path)
@@ -496,23 +473,19 @@ class PhonePriceSearchApp:
                     continue
 
         if not rows:
-            messagebox.showwarning("警告", "未能从表格中读取到任何数据！")
+            messagebox.showwarning("Warning", "No data rows found in the selected file.")
             return
 
-        # 智能寻找“型号/机型”列
         sample_keys = list(rows[0].keys())
         model_col = next(
             (
                 k
                 for k in sample_keys
-                if any(x in k for x in ["型号", "机型", "设备", "名称", "品名"])
+                if any(x in k.lower() for x in ["model", "device", "name", "型号", "机型", "品名"])
             ),
-            None,
+            sample_keys[0],
         )
-        if not model_col:
-            model_col = sample_keys[0]  # 默认取第一列
 
-        # 开始批量比对核价
         matched_count = 0
         result_rows = []
 
@@ -520,7 +493,6 @@ class PhonePriceSearchApp:
             raw_input_model = r.get(model_col, "").strip()
             c_input = clean_text(raw_input_model)
 
-            # 在全量回收库中智能寻找最佳匹配项
             best_match = None
             highest_score = -1
 
@@ -528,13 +500,11 @@ class PhonePriceSearchApp:
                 db_model = clean_text(db_item["model"])
                 db_source = clean_text(db_item["source"])
 
-                # 完全一致
                 if c_input == db_model or c_input == f"{db_source}{db_model}":
                     best_match = db_item
                     highest_score = 1000
                     break
 
-                # 包含匹配
                 if db_model and (db_model in c_input or c_input in db_model):
                     score = 500 - abs(len(c_input) - len(db_model)) * 10
                     if score > highest_score:
@@ -543,34 +513,29 @@ class PhonePriceSearchApp:
 
             row_out = dict(r)
             if best_match:
-                row_out["回收匹配结果"] = (
-                    f"【{best_match['source']}】{best_match['model']}"
-                )
-                row_out["开机屏好参考价"] = best_match["price_good"]
-                row_out["开机屏坏参考价"] = best_match["price_screen_bad"]
-                row_out["不开机参考价"] = best_match["price_no_power"]
-                row_out["废板整机参考价"] = best_match["price_junk"]
-                row_out["回收扣款备注细则"] = best_match["remark"]
+                row_out["Matched_Model"] = f"[{best_match['source']}] {best_match['model']}"
+                row_out["Quote_ScreenGood"] = best_match["price_good"]
+                row_out["Quote_ScreenBroken"] = best_match["price_screen_bad"]
+                row_out["Quote_NoPower"] = best_match["price_no_power"]
+                row_out["Quote_ScrapBoard"] = best_match["price_junk"]
+                row_out["Deduction_Remarks"] = best_match["remark"]
                 matched_count += 1
             else:
-                row_out["回收匹配结果"] = "未匹配到对应机型"
-                row_out["开机屏好参考价"] = "-"
-                row_out["开机屏坏参考价"] = "-"
-                row_out["不开机参考价"] = "-"
-                row_out["废板整机参考价"] = "-"
-                row_out["回收扣款备注细则"] = "-"
+                row_out["Matched_Model"] = "Unmatched"
+                row_out["Quote_ScreenGood"] = "-"
+                row_out["Quote_ScreenBroken"] = "-"
+                row_out["Quote_NoPower"] = "-"
+                row_out["Quote_ScrapBoard"] = "-"
+                row_out["Deduction_Remarks"] = "-"
 
             result_rows.append(row_out)
 
-        # 导出核价后的表格
-        default_out_name = f"核价完成_{os.path.splitext(os.path.basename(file_path))[0]}_{datetime.now().strftime('%m%d_%H%M')}.xlsx"
+        default_out_name = f"Priced_{os.path.splitext(os.path.basename(file_path))[0]}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         save_path = filedialog.asksaveasfilename(
-            title="保存自动估价后的表格",
+            title="Save Priced Inventory",
             initialfile=default_out_name,
             defaultextension=".xlsx" if HAS_OPENPYXL else ".csv",
-            filetypes=[("Excel 表格", "*.xlsx")]
-            if HAS_OPENPYXL
-            else [("CSV 表格", "*.csv")],
+            filetypes=[("Excel Files", "*.xlsx")] if HAS_OPENPYXL else [("CSV Files", "*.csv")],
         )
         if not save_path:
             return
@@ -578,7 +543,7 @@ class PhonePriceSearchApp:
         if save_path.lower().endswith(".xlsx") and HAS_OPENPYXL:
             wb_out = openpyxl.Workbook()
             ws_out = wb_out.active
-            ws_out.title = "回收估价核算表"
+            ws_out.title = "Appraisal_Result"
             out_headers = list(result_rows[0].keys())
             ws_out.append(out_headers)
             for item in result_rows:
@@ -591,8 +556,8 @@ class PhonePriceSearchApp:
                 writer.writerows(result_rows)
 
         messagebox.showinfo(
-            "核价完成",
-            f"🎉 批量估价已完成！\n总行数：{len(rows)} 行\n成功匹配：{matched_count} 款机型\n\n已成功保存至：\n{save_path}",
+            "Completed",
+            f"Batch pricing completed!\nTotal rows: {len(rows)}\nMatched models: {matched_count}\n\nSaved to:\n{save_path}",
         )
 
     def sort_by_column(self, col):
@@ -633,8 +598,8 @@ class PhonePriceSearchApp:
             return
 
         win = tk.Toplevel(self.root)
-        win.title(f"机型回收细则 - {model_name}")
-        win.geometry("540x450")
+        win.title(f"Price & Deduction Details - {model_name}")
+        win.geometry("560x460")
         win.transient(self.root)
 
         frame = ttk.Frame(win, padding=15)
@@ -642,8 +607,8 @@ class PhonePriceSearchApp:
 
         ttk.Label(
             frame,
-            text=f"【{source_name}】 {model_name}",
-            font=("微软雅黑", 12, "bold"),
+            text=f"[{source_name}] {model_name}",
+            font=("Segoe UI", 12, "bold"),
         ).pack(anchor=tk.W, pady=(0, 10))
 
         text_box = tk.Text(
@@ -653,16 +618,16 @@ class PhonePriceSearchApp:
 
         for k, v in matched_item["raw_dict"].items():
             if v and str(v).strip():
-                text_box.insert(tk.END, f"• {k.ljust(15)} :  {v}\n")
+                text_box.insert(tk.END, f"- {k.ljust(18)} : {v}\n")
 
         if matched_item.get("change_tag"):
             text_box.insert(
                 tk.END,
-                f"\n🔥 价格变动记录：{matched_item['fluctuation']}\n",
+                f"\nPrice Trend History: {matched_item['fluctuation']}\n",
             )
 
         text_box.configure(state="disabled")
-        ttk.Button(frame, text="确定", command=win.destroy).pack(pady=10)
+        ttk.Button(frame, text="Close", command=win.destroy).pack(pady=10)
 
 
 if __name__ == "__main__":
