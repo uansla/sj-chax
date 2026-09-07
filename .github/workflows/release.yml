@@ -1,401 +1,101 @@
-name: 自动编译并发布 EXE 工具
-
+name: Build and Publish Release
 
 on:
-
   push:
     tags:
       - 'v*'
-
-
   workflow_dispatch:
-
     inputs:
-
       version_tag:
-
-        description: '发布版本号 (如 v1.0.2)'
-
-        required: true
-
+        description: 'Release version tag (e.g. v1.0.2)'
+        required: false
         default: 'v1.0.2'
 
-
-
 jobs:
-
-
-  build-windows:
-
-
-    runs-on: windows-2025
-
-
+  publish-release:
+    runs-on: windows-latest
     permissions:
-
       contents: write
 
-
-
     steps:
-
-
-      # ============================
-      # 1. 拉取代码
-      # ============================
-
-      - name: 1. 拉取仓库代码
-
+      - name: Checkout repository
         uses: actions/checkout@v5
 
-
-
-
-      # ============================
-      # 2. Python环境
-      # ============================
-
-      - name: 2. 配置 Python 环境
-
+      - name: Set up Python
         uses: actions/setup-python@v6
-
         with:
-
           python-version: "3.11"
 
-
-
-
-      # ============================
-      # 3. 安装PyInstaller
-      # ============================
-
-      - name: 3. 安装打包工具
-
+      - name: Install build tools
         run: |
-
           python -m pip install --upgrade pip
-
           pip install pyinstaller
 
-
-
-
-
-      # ============================
-      # 4. 编译EXE
-      # ============================
-
-      - name: 4. 编译 Windows EXE
-
-        shell: pwsh
-
+      - name: Build Windows executable
         run: |
+          pyinstaller -F -w --name "PhonePriceSearch" phone_search.py
 
-          pyinstaller -F -w --name PhoneSearch phone_search.py
-
-
-
-
-
-      # ============================
-      # 5. 组装发布包
-      # ============================
-
-      - name: 5. 组装安装包
-
+      - name: Assemble release package
         shell: python
-
         run: |
+          import os, shutil, zipfile
 
-          import os
+          app_dir = "PhonePriceSearch_App"
+          zip_name = "PhonePriceSearch_Windows.zip"
 
-          import shutil
-
-          import zipfile
-
-
-
-          app_dir = "PhoneSearch_App"
-
-          zip_name = "PhoneSearch_Windows.zip"
-
-
-
-          print("开始创建发布目录")
-
-
-
+          # 1. Create clean packaging directory
           if os.path.exists(app_dir):
-
               shutil.rmtree(app_dir)
-
-
-
-          os.makedirs(
-
-              os.path.join(app_dir, "data"),
-
-              exist_ok=True
-
-          )
-
-
-
-
-          # -----------------------
-          # 复制EXE
-          # -----------------------
-
-          exe_file = os.path.join(
-
-              "dist",
-
-              "PhoneSearch.exe"
-
-          )
-
-
-          if not os.path.exists(exe_file):
-
-              raise FileNotFoundError(
-
-                  "没有找到 dist/PhoneSearch.exe"
-
-              )
-
-
-
-          shutil.copy2(
-
-              exe_file,
-
-              os.path.join(
-
-                  app_dir,
-
-                  "手机回收价格秒查工具.exe"
-
-              )
-
-          )
-
-
-          print("EXE复制完成")
-
-
-
-
-          # -----------------------
-          # 复制CSV
-          # -----------------------
-
-          data_dir = "data"
-
-          csv_count = 0
-
-
-
-          if not os.path.exists(data_dir):
-
-              raise FileNotFoundError(
-
-                  "项目中没有找到data目录"
-
-              )
-
-
-
-          for file in os.listdir(data_dir):
-
-
-              if file.lower().endswith(".csv"):
-
-
-                  shutil.copy2(
-
-                      os.path.join(data_dir,file),
-
-                      os.path.join(
-
-                          app_dir,
-
-                          "data",
-
-                          file
-
-                      )
-
-                  )
-
-
-                  csv_count += 1
-
-
-                  print(
-
-                      "复制CSV:",
-
-                      file
-
-                  )
-
-
-
-
-          if csv_count == 0:
-
-
-              raise Exception(
-
-                  "data目录里面没有CSV文件"
-
-              )
-
-
-
-          print(
-
-              f"共复制 {csv_count} 个CSV文件"
-
-          )
-
-
-
-
-
-          # -----------------------
-          # 创建ZIP
-          # -----------------------
-
-          with zipfile.ZipFile(
-
-              zip_name,
-
-              "w",
-
-              zipfile.ZIP_DEFLATED
-
-          ) as zf:
-
-
-
+          os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
+
+          # 2. Copy main executable
+          exe_src = os.path.join("dist", "PhonePriceSearch.exe")
+          if os.path.exists(exe_src):
+              shutil.copy2(exe_src, os.path.join(app_dir, "PhonePriceSearch.exe"))
+              print("Copied executable: PhonePriceSearch.exe")
+          else:
+              raise FileNotFoundError("PhonePriceSearch.exe not found in dist/")
+
+          # 3. Copy all CSV price tables safely
+          data_src = "data"
+          file_count = 0
+          if os.path.exists(data_src):
+              for f in os.listdir(data_src):
+                  if f.lower().endswith(".csv"):
+                      shutil.copy2(os.path.join(data_src, f), os.path.join(app_dir, "data", f))
+                      file_count += 1
+                      print(f"Packed CSV: {f}")
+          print(f"data directory assembled: {file_count} CSV files total")
+
+          # 4. Create standard UTF-8 ZIP archive
+          with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
               for root, dirs, files in os.walk(app_dir):
+                  for f in files:
+                      full_path = os.path.join(root, f)
+                      rel_path = os.path.relpath(full_path, ".")
+                      zf.write(full_path, rel_path)
+          print("PhonePriceSearch_Windows.zip archive created successfully")
 
+      - name: Upload artifact to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhonePriceSearch_Windows
+          path: PhonePriceSearch_Windows.zip
 
-                  for file in files:
-
-
-                      full_path = os.path.join(
-
-                          root,
-
-                          file
-
-                      )
-
-
-                      zf.write(
-
-                          full_path,
-
-                          os.path.relpath(
-
-                              full_path,
-
-                              app_dir
-
-                          )
-
-                      )
-
-
-
-          print(
-
-              "ZIP创建完成:",
-
-              zip_name
-
-          )
-
-
-
-
-
-      # ============================
-      # 6. 发布Release
-      # ============================
-
-
-      - name: 6. 自动发布 Release
-
-
-        shell: bash
-
-
+      - name: Publish to GitHub Releases
         env:
-
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-
+        shell: bash
         run: |
-
-
           TAG="${{ github.event.inputs.version_tag }}"
-
-
-
           if [ -z "$TAG" ]; then
-
-              TAG="${{ github.ref_name }}"
-
+            TAG="${{ github.ref_name }}"
           fi
+          echo "Target Release Tag: $TAG"
 
+          gh release create "$TAG" PhonePriceSearch_Windows.zip \
+            --title "Phone Price Search Tool $TAG" \
+            --notes "Standalone Windows Release: Includes PhonePriceSearch.exe and external data/ directory with all brand CSV price tables." \
+            || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
 
-
-          echo "当前版本: $TAG"
-
-
-
-
-          # 如果Release存在
-
-          if gh release view "$TAG" >/dev/null 2>&1
-
-          then
-
-
-              echo "Release已存在，上传文件"
-
-
-              gh release upload \
-
-              "$TAG" \
-
-              PhoneSearch_Windows.zip \
-
-              --clobber
-
-
-
-          else
-
-
-              echo "创建新的Release"
-
-
-              gh release create \
-
-              "$TAG" \
-
-              PhoneSearch_Windows.zip \
-
-              --title "手机回收价格秒查工具 $TAG" \
-
-              --notes "自动构建绿色版"
-
-
-
-          fi
+          echo "Release publication completed successfully"
