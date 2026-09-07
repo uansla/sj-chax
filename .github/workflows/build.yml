@@ -1,215 +1,104 @@
-name: 自动编译发布手机回收价格工具
-
+name: 自动构建与发布 Windows 工具包
 
 on:
-
   push:
+    branches: [ "main", "master" ]
     tags:
-      - "v*"
-
+      - 'v*'
   workflow_dispatch:
-
     inputs:
-
-      version:
-
-        description: 发布版本号
-
-        required: true
-
-        default: v1.0.0
-
-
+      version_tag:
+        description: '发布版本号 (如 v1.0.2，留空则自动根据标签发布)'
+        required: false
+        default: 'v1.0.2'
 
 jobs:
-
-
-  build:
-
-
-    runs-on: windows-2025
-
-
+  build-and-release:
+    runs-on: windows-latest
     permissions:
-
       contents: write
 
-
-
     steps:
-
-
-    - name: 拉取代码
-
-      uses: actions/checkout@v5
-
-
-
-    - name: 设置Python环境
-
-      uses: actions/setup-python@v6
-
-      with:
-
-        python-version: "3.11"
-
-
-
-    - name: 安装PyInstaller
-
-
-      run: |
-
-        python -m pip install --upgrade pip
-
-        pip install pyinstaller
-
-
-
-    - name: 编译EXE
-
-
-      run: |
-
-        pyinstaller ^
-        -F ^
-        -w ^
-        --name PhoneSearch ^
-        phone_search.py
-
-
-
-    - name: 创建发布目录
-
-
-      shell: python
-
-
-      run: |
-
-
-        import os
-
-        import shutil
-
-        import zipfile
-
-
-
-        out="PhoneSearch_App"
-
-
-
-        if os.path.exists(out):
-
-            shutil.rmtree(out)
-
-
-
-        os.makedirs(
-            out+"/data",
-            exist_ok=True
-        )
-
-
-
-        shutil.copy2(
-
-            "dist/PhoneSearch.exe",
-
-            out+"/手机回收价格秒查工具.exe"
-
-        )
-
-
-
-        if os.path.exists("data"):
-
-
-            for f in os.listdir("data"):
-
-
-                if f.lower().endswith(".csv"):
-
-
-                    shutil.copy2(
-
-                    "data/"+f,
-
-                    out+"/data/"+f
-
-                    )
-
-
-
-        with zipfile.ZipFile(
-
-            "PhoneSearch_Windows.zip",
-
-            "w",
-
-            zipfile.ZIP_DEFLATED
-
-        ) as z:
-
-
-
-            for root,dirs,files in os.walk(out):
-
-
-                for file in files:
-
-
-                    path=os.path.join(root,file)
-
-
-                    z.write(
-
-                    path,
-
-                    path
-
-                    )
-
-
-
-        print("打包完成")
-
-
-
-
-    - name: 发布Release
-
-
-      env:
-
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-
-      shell: bash
-
-
-      run: |
-
-
-        TAG="${{ github.event.inputs.version }}"
-
-
-        if [ -z "$TAG" ];then
-
-          TAG="${{ github.ref_name }}"
-
-        fi
-
-
-
-        gh release create "$TAG" \
-
-        PhoneSearch_Windows.zip \
-
-        --title "手机回收价格秒查工具 $TAG" \
-
-        --notes "自动构建绿色版"
-
-
+      - name: 拉取代码
+        uses: actions/checkout@v5
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: 安装打包工具
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: 编译 Windows EXE (使用纯英文编译名避免服务器编码崩溃)
+        run: |
+          pyinstaller -F -w --name "PhoneSearch" phone_search.py
+
+      - name: 组装分发包 (原生 Python 模式，彻底杜绝乱码并保留全部 CSV)
+        shell: python
+        run: |
+          import os, shutil, zipfile
+
+          app_dir = "PhoneSearch_App"
+          zip_name = "PhoneSearch_Windows.zip"
+
+          # 1. 创建干净的独立发布目录
+          if os.path.exists(app_dir):
+              shutil.rmtree(app_dir)
+          os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
+
+          # 2. 拷贝主程序并重命名为中文名
+          exe_src = os.path.join("dist", "PhoneSearch.exe")
+          if os.path.exists(exe_src):
+              shutil.copy2(exe_src, os.path.join(app_dir, "手机回收价格秒查工具.exe"))
+              print("✅ 主程序已生成并命名为: 手机回收价格秒查工具.exe")
+          else:
+              raise FileNotFoundError("未在 dist 目录下找到编译后的 EXE 文件！")
+
+          # 3. 完整拷贝 data 目录下的所有 CSV 表格
+          data_src = "data"
+          file_count = 0
+          if os.path.exists(data_src):
+              for f in os.listdir(data_src):
+                  if f.lower().endswith(".csv"):
+                      shutil.copy2(os.path.join(data_src, f), os.path.join(app_dir, "data", f))
+                      file_count += 1
+                      print(f"-> 已打包表格: {f}")
+          print(f"✅ data 目录装配完成，共打包 {file_count} 个 CSV 表格")
+
+          # 4. 生成标准 UTF-8 编码的 ZIP 压缩文件
+          with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
+              for root, dirs, files in os.walk(app_dir):
+                  for f in files:
+                      full_path = os.path.join(root, f)
+                      rel_path = os.path.relpath(full_path, ".")
+                      zf.write(full_path, rel_path)
+          print("🎉 PhoneSearch_Windows.zip 压缩包打包成功！")
+
+      - name: 上传构建产物到 Artifacts (可在 Actions 运行页直接下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhoneSearch_Windows
+          path: PhoneSearch_Windows.zip
+
+      - name: 自动同步发布到 GitHub Releases (官方原生命令)
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.version_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "发布目标版本标签: $TAG"
+
+          # 使用官方 gh 命令：不存在则自动创建，已存在则自动覆盖上传新附件
+          gh release create "$TAG" PhoneSearch_Windows.zip \
+            --title "手机回收价格秒查工具 $TAG" \
+            --notes "免安装绿色版：已完整包含所有品牌的 CSV 价格表格与独立主程序。" \
+            || gh release upload "$TAG" PhoneSearch_Windows.zip --clobber
+
+          echo "✅ Release 发布与附件挂载完成！"
