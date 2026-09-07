@@ -75,22 +75,39 @@ jobs:
                       rel_path = os.path.relpath(full_path, ".")
                       zf.write(full_path, rel_path)
           print("🎉 PhoneSearch_Windows.zip 压缩包打包成功！")
-
-      - name: 6. 自动发布到 Release (GitHub 官方原生命令，防报错)
+         
+          - name: 6. 自动发布 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+
           TAG="${{ github.event.inputs.version_tag }}"
+
           if [ -z "$TAG" ]; then
-            TAG="${{ github.ref_name }}"
+              TAG="${{ github.ref_name }}"
           fi
-          echo "发布目标版本标签: $TAG"
 
-          # 使用官方 gh 工具：不存在则自动创建，存在则自动覆盖上传新附件
-          gh release create "$TAG" PhoneSearch_Windows.zip \
-            --title "手机回收价格秒查工具 $TAG" \
-            --notes "免安装绿色版：已完整包含所有品牌的 CSV 价格表格，中文名称已全部恢复。" \
-            || gh release upload "$TAG" PhoneSearch_Windows.zip --clobber
+          echo "版本:$TAG"
 
-          echo "✅ Release 发布成功！"
+
+          if gh release view "$TAG" >/dev/null 2>&1
+          then
+              echo "Release存在，上传文件"
+
+              gh release upload \
+              "$TAG" \
+              PhoneSearch_Windows.zip \
+              --clobber
+
+          else
+
+              echo "创建Release"
+
+              gh release create \
+              "$TAG" \
+              PhoneSearch_Windows.zip \
+              --title "手机回收价格秒查工具 $TAG" \
+              --notes "自动构建版本"
+
+          fi
