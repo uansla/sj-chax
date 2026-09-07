@@ -1,0 +1,48 @@
+name: 每日自动爬图与价格OCR更新
+
+on:
+  schedule:
+    # 每天 UTC 00:30 (即北京时间 08:30) 定时执行
+    - cron: '30 0 * * *'
+  # 支持在 GitHub 网页上手动随时一键点按钮运行
+  workflow_dispatch:
+
+jobs:
+  auto-crawl-and-update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v4
+
+      - name: 2. 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 3. 安装爬虫、图像处理与轻量 OCR 依赖
+        run: |
+          pip install requests beautifulsoup4 pillow rapidocr_onnxruntime
+
+      - name: 4. 执行自动爬图、切片识别与价格更新
+        run: |
+          python auto_pipeline.py
+
+      - name: 5. 自动提交并推送到 GitHub 仓库
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 暂存爬取到的海报长图和更新后的价格表格
+          git add images/ data/
+          
+          # 判断是否有实质变更
+          if git diff --staged --quiet; then
+            echo "今日数码回收网无更新，无需提交。"
+          else
+            echo "检测到海报或价格变动，正在自动提交到 main 分支..."
+            git commit -m "Auto: 自动爬取最新报价海报并同步价格 [$(date +'%Y-%m-%d')]"
+            git push origin main
+          fi
