@@ -4,9 +4,7 @@ name: 自动编译并发布 EXE 工具
 on:
 
   push:
-
     tags:
-
       - 'v*'
 
 
@@ -42,6 +40,9 @@ jobs:
     steps:
 
 
+      # ============================
+      # 1. 拉取代码
+      # ============================
 
       - name: 1. 拉取仓库代码
 
@@ -49,6 +50,10 @@ jobs:
 
 
 
+
+      # ============================
+      # 2. Python环境
+      # ============================
 
       - name: 2. 配置 Python 环境
 
@@ -61,6 +66,10 @@ jobs:
 
 
 
+      # ============================
+      # 3. 安装PyInstaller
+      # ============================
+
       - name: 3. 安装打包工具
 
         run: |
@@ -72,14 +81,26 @@ jobs:
 
 
 
+
+      # ============================
+      # 4. 编译EXE
+      # ============================
+
       - name: 4. 编译 Windows EXE
+
+        shell: pwsh
 
         run: |
 
-          pyinstaller -F -w --name "PhoneSearch" phone_search.py
+          pyinstaller -F -w --name PhoneSearch phone_search.py
 
 
 
+
+
+      # ============================
+      # 5. 组装发布包
+      # ============================
 
       - name: 5. 组装安装包
 
@@ -101,6 +122,10 @@ jobs:
 
 
 
+          print("开始创建发布目录")
+
+
+
           if os.path.exists(app_dir):
 
               shutil.rmtree(app_dir)
@@ -109,7 +134,7 @@ jobs:
 
           os.makedirs(
 
-              os.path.join(app_dir,"data"),
+              os.path.join(app_dir, "data"),
 
               exist_ok=True
 
@@ -117,7 +142,12 @@ jobs:
 
 
 
-          exe_src=os.path.join(
+
+          # -----------------------
+          # 复制EXE
+          # -----------------------
+
+          exe_file = os.path.join(
 
               "dist",
 
@@ -126,12 +156,11 @@ jobs:
           )
 
 
-
-          if not os.path.exists(exe_src):
+          if not os.path.exists(exe_file):
 
               raise FileNotFoundError(
 
-                  "没有找到 PhoneSearch.exe"
+                  "没有找到 dist/PhoneSearch.exe"
 
               )
 
@@ -139,7 +168,7 @@ jobs:
 
           shutil.copy2(
 
-              exe_src,
+              exe_file,
 
               os.path.join(
 
@@ -152,52 +181,74 @@ jobs:
           )
 
 
-
-          print(
-              "✅ EXE复制完成"
-          )
+          print("EXE复制完成")
 
 
 
-          data_src="data"
 
-          file_count=0
+          # -----------------------
+          # 复制CSV
+          # -----------------------
 
+          data_dir = "data"
 
-
-          if os.path.exists(data_src):
-
-
-              for f in os.listdir(data_src):
+          csv_count = 0
 
 
-                  if f.lower().endswith(".csv"):
+
+          if not os.path.exists(data_dir):
+
+              raise FileNotFoundError(
+
+                  "项目中没有找到data目录"
+
+              )
 
 
-                      shutil.copy2(
 
-                          os.path.join(data_src,f),
+          for file in os.listdir(data_dir):
 
-                          os.path.join(app_dir,"data",f)
+
+              if file.lower().endswith(".csv"):
+
+
+                  shutil.copy2(
+
+                      os.path.join(data_dir,file),
+
+                      os.path.join(
+
+                          app_dir,
+
+                          "data",
+
+                          file
 
                       )
 
-
-                      file_count+=1
-
-
-                      print(
-                          "CSV:",
-                          f
-                      )
+                  )
 
 
+                  csv_count += 1
 
-          if file_count==0:
+
+                  print(
+
+                      "复制CSV:",
+
+                      file
+
+                  )
+
+
+
+
+          if csv_count == 0:
+
 
               raise Exception(
 
-                  "data目录没有找到CSV文件"
+                  "data目录里面没有CSV文件"
 
               )
 
@@ -205,12 +256,17 @@ jobs:
 
           print(
 
-              f"共复制 {file_count} 个CSV"
+              f"共复制 {csv_count} 个CSV文件"
 
           )
 
 
 
+
+
+          # -----------------------
+          # 创建ZIP
+          # -----------------------
 
           with zipfile.ZipFile(
 
@@ -224,22 +280,28 @@ jobs:
 
 
 
-              for root,dirs,files in os.walk(app_dir):
+              for root, dirs, files in os.walk(app_dir):
 
 
-                  for f in files:
+                  for file in files:
 
 
-                      full=os.path.join(root,f)
+                      full_path = os.path.join(
+
+                          root,
+
+                          file
+
+                      )
 
 
                       zf.write(
 
-                          full,
+                          full_path,
 
                           os.path.relpath(
 
-                              full,
+                              full_path,
 
                               app_dir
 
@@ -251,7 +313,9 @@ jobs:
 
           print(
 
-              "🎉 ZIP创建成功"
+              "ZIP创建完成:",
+
+              zip_name
 
           )
 
@@ -259,7 +323,15 @@ jobs:
 
 
 
+      # ============================
+      # 6. 发布Release
+      # ============================
+
+
       - name: 6. 自动发布 Release
+
+
+        shell: bash
 
 
         env:
@@ -268,13 +340,11 @@ jobs:
 
 
 
-        shell: bash
-
-
         run: |
 
 
           TAG="${{ github.event.inputs.version_tag }}"
+
 
 
           if [ -z "$TAG" ]; then
@@ -285,17 +355,19 @@ jobs:
 
 
 
-          echo "发布版本:$TAG"
+          echo "当前版本: $TAG"
 
 
 
+
+          # 如果Release存在
 
           if gh release view "$TAG" >/dev/null 2>&1
 
           then
 
 
-              echo "Release存在，上传附件"
+              echo "Release已存在，上传文件"
 
 
               gh release upload \
@@ -311,7 +383,7 @@ jobs:
           else
 
 
-              echo "创建Release"
+              echo "创建新的Release"
 
 
               gh release create \
