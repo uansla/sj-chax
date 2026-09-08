@@ -2,6 +2,113 @@ import csv
 import glob
 import json
 import os
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+class PhonePriceSearchApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("数码回收价格秒查工具 - 10列适配版")
+        self.root.geometry("1400x700")
+
+        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        self.all_data = []
+
+        self._setup_ui()
+        self.load_all_data()
+
+    def _setup_ui(self):
+        top_frame = ttk.Frame(self.root, padding=10)
+        top_frame.pack(fill=tk.X)
+
+        ttk.Label(top_frame, text="输入型号关键词:").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *args: self.do_search())
+        ttk.Entry(top_frame, textvariable=self.search_var, width=50).pack(side=tk.LEFT, padx=10)
+        
+        ttk.Button(top_frame, text="重新加载数据", command=self.load_all_data).pack(side=tk.LEFT)
+
+        # 10 列显示定义
+        self.columns = [
+            ("source", "品牌", 80),
+            ("series", "系列", 100),
+            ("model", "型号/配置", 250),
+            ("p1", "开机靓好", 85),
+            ("p2", "开机好碎", 85),
+            ("p3", "开机碎屏", 85),
+            ("p4", "开机压屏", 85),
+            ("p5", "不开机", 85),
+            ("p6", "废板-整机", 85),
+            ("remark", "备注", 200)
+        ]
+
+        table_frame = ttk.Frame(self.root)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.tree = ttk.Treeview(table_frame, columns=[c[0] for c in self.columns], show="headings")
+        for col_id, col_name, width in self.columns:
+            self.tree.heading(col_id, text=col_name)
+            self.tree.column(col_id, width=width, anchor=tk.W)
+
+        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def load_all_data(self):
+        self.all_data.clear()
+        csv_files = glob.glob(os.path.join(self.data_dir, "*.csv"))
+        
+        for f_path in csv_files:
+            brand = os.path.basename(f_path).replace(".csv", "")
+            try:
+                # 使用 utf-8-sig 兼容 Excel 生成的 CSV
+                with open(f_path, "r", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # 核心修改：兼容不同表头名，防止某一列不显示
+                        self.all_data.append({
+                            "source": brand,
+                            "series": row.get("系列") or brand,
+                            "model": row.get("型号") or row.get("机型及配置") or "Unknown",
+                            "p1": row.get("开机靓好") or row.get("开机屏好") or "-",
+                            "p2": row.get("开机好碎") or row.get("开机屏坏") or "-",
+                            "p3": row.get("开机碎屏") or "-",
+                            "p4": row.get("开机压屏") or "-",
+                            "p5": row.get("不开机") or "-",
+                            "p6": row.get("废板-整机") or "-",
+                            "remark": row.get("备注") or ""
+                        })
+            except Exception as e:
+                print(f"读取 {f_path} 错误: {e}")
+        
+        self.do_search()
+
+    def do_search(self):
+        query = self.search_var.get().lower().strip()
+        for item in self.tree.get_children(): self.tree.delete(item)
+        
+        for d in self.all_data:
+            if not query or query in d['model'].lower() or query in d['source'].lower():
+                self.tree.insert("", tk.END, values=(
+                    d['source'], d['series'], d['model'],
+                    d['p1'], d['p2'], d['p3'], d['p4'], d['p5'], d['p6'],
+                    d['remark']
+                ))
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    # 提升 Windows 下的清晰度
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except: pass
+    app = PhonePriceSearchApp(root)
+    root.mainloop()import csv
+import glob
+import json
+import os
 import re
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
