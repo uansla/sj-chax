@@ -3,11 +3,11 @@ name: Build and Publish Windows App
 on:
   push:
     tags:
-      - 'v*' # 当推送 v1.0, v2.0 等标签时触发
+      - 'v*' 
   workflow_dispatch:
     inputs:
       version_tag:
-        description: '手动发布的版本号 (例如: v1.0.5)'
+        description: '发布版本号'
         required: false
         default: 'v1.0.0'
 
@@ -31,59 +31,55 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
 
-      - name: 编译 EXE 执行文件
+      - name: 使用 PyInstaller 打包 EXE
         run: |
-          # 编译为单文件绿色版，不带控制台窗口
-          pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
+          # 使用英文名打包防止 Spec 文件编码报错
+          pyinstaller -F -w --name "RecycleSearchTool" phone_search.py
 
-      - name: 打包发布压缩包 (包含数据)
+      - name: 自动化整合发布包
         shell: python
         run: |
           import os, shutil, zipfile
 
-          app_dir = "RecycleTool_Release"
+          app_dir = "Release_Package"
           zip_name = "PhonePriceSearch_Windows.zip"
 
-          # 创建发布目录结构
           if os.path.exists(app_dir): shutil.rmtree(app_dir)
           os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
 
-          # 1. 复制生成的 EXE
-          exe_src = "dist/手机回收价格秒查工具.exe"
+          # 1. 复制主程序并重命名为中文名
+          exe_src = "dist/RecycleSearchTool.exe"
           shutil.copy2(exe_src, os.path.join(app_dir, "手机回收价格秒查工具.exe"))
 
-          # 2. 复制 data 目录下的所有标准 CSV
+          # 2. 复制 data 目录下的 CSV
           data_path = "data"
-          for f in os.listdir(data_path):
-              if f.endswith(".csv"):
-                  shutil.copy2(os.path.join(data_path, f), os.path.join(app_dir, "data", f))
+          if os.path.exists(data_path):
+              for f in os.listdir(data_path):
+                  if f.endswith(".csv"):
+                      shutil.copy2(os.path.join(data_path, f), os.path.join(app_dir, "data", f))
 
-          # 3. 制作 ZIP
+          # 3. 创建 ZIP 压缩包 (保持内部相对路径)
           with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
               for root, dirs, files in os.walk(app_dir):
                   for f in files:
-                      zf.write(os.path.join(root, f), os.path.join(os.path.relpath(root, app_dir), f))
+                      full_path = os.path.join(root, f)
+                      rel_path = os.path.relpath(full_path, app_dir)
+                      zf.write(full_path, rel_path)
+          print("压缩包打包完成")
 
-      - name: 上传构建产物到 Actions
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows_App_Package
-          path: PhonePriceSearch_Windows.zip
-
-      - name: 发布到 GitHub Releases
+      - name: 创建 GitHub Release 并上传
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          # 确定版本号：优先使用输入的版本，否则使用 Git Tag
           TAG="${{ github.event.inputs.version_tag }}"
           if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
             TAG="${{ github.ref_name }}"
           fi
           
-          echo "正在发布版本: $TAG"
+          echo "正在发布至版本: $TAG"
 
           gh release create "$TAG" PhonePriceSearch_Windows.zip \
-            --title "手机回收报价工具 $TAG" \
-            --notes "此版本包含最新的标准 10 列价格 CSV 数据。下载后解压，直接运行 EXE 即可使用。" \
+            --title "手机回收报价查询工具 $TAG" \
+            --notes "同步最新 10 列标准价格数据格式。下载解压后，请确保 EXE 和 data 文件夹在同一目录下。" \
             || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
