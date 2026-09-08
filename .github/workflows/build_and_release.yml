@@ -16,6 +16,9 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    
+    env:
+      PYTHONUTF8: 1  # 强制 Python 在 Windows 终端使用 UTF-8 编码
 
     steps:
       - name: 检出代码
@@ -33,8 +36,8 @@ jobs:
 
       - name: 使用 PyInstaller 打包 EXE
         run: |
-          # 使用英文名打包防止 Spec 文件编码报错
-          pyinstaller -F -w --name "RecycleSearchTool" phone_search.py
+          # 使用英文名编译，避免 spec 文件路径编码问题
+          pyinstaller -F -w --name "SearchTool" phone_search.py
 
       - name: 自动化整合发布包
         shell: python
@@ -47,25 +50,27 @@ jobs:
           if os.path.exists(app_dir): shutil.rmtree(app_dir)
           os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
 
-          # 1. 复制主程序并重命名为中文名
-          exe_src = "dist/RecycleSearchTool.exe"
-          shutil.copy2(exe_src, os.path.join(app_dir, "手机回收价格秒查工具.exe"))
-
+          # 1. 复制并重命名主程序
+          exe_src = "dist/SearchTool.exe"
+          if os.path.exists(exe_src):
+              shutil.copy2(exe_src, os.path.join(app_dir, "手机回收价格秒查工具.exe"))
+          
           # 2. 复制 data 目录下的 CSV
           data_path = "data"
           if os.path.exists(data_path):
               for f in os.listdir(data_path):
-                  if f.endswith(".csv"):
+                  if f.lower().endswith(".csv"):
                       shutil.copy2(os.path.join(data_path, f), os.path.join(app_dir, "data", f))
 
-          # 3. 创建 ZIP 压缩包 (保持内部相对路径)
+          # 3. 创建 ZIP 压缩包
           with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
               for root, dirs, files in os.walk(app_dir):
                   for f in files:
                       full_path = os.path.join(root, f)
                       rel_path = os.path.relpath(full_path, app_dir)
                       zf.write(full_path, rel_path)
-          print("压缩包打包完成")
+          
+          print("Build successfully assembled into zip.")
 
       - name: 创建 GitHub Release 并上传
         env:
@@ -77,9 +82,9 @@ jobs:
             TAG="${{ github.ref_name }}"
           fi
           
-          echo "正在发布至版本: $TAG"
+          echo "Target Release Version: $TAG"
 
           gh release create "$TAG" PhonePriceSearch_Windows.zip \
-            --title "手机回收报价查询工具 $TAG" \
-            --notes "同步最新 10 列标准价格数据格式。下载解压后，请确保 EXE 和 data 文件夹在同一目录下。" \
+            --title "手机回收报价工具 $TAG" \
+            --notes "包含最新的 10 列标准价格数据格式。下载解压后，双击 EXE 运行。" \
             || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
