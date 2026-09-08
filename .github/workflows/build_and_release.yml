@@ -1,0 +1,89 @@
+name: Build and Publish Windows App
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送 v1.0, v2.0 等标签时触发
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: '手动发布的版本号 (例如: v1.0.5)'
+        required: false
+        default: 'v1.0.0'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装打包工具
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: 编译 EXE 执行文件
+        run: |
+          # 编译为单文件绿色版，不带控制台窗口
+          pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
+
+      - name: 打包发布压缩包 (包含数据)
+        shell: python
+        run: |
+          import os, shutil, zipfile
+
+          app_dir = "RecycleTool_Release"
+          zip_name = "PhonePriceSearch_Windows.zip"
+
+          # 创建发布目录结构
+          if os.path.exists(app_dir): shutil.rmtree(app_dir)
+          os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
+
+          # 1. 复制生成的 EXE
+          exe_src = "dist/手机回收价格秒查工具.exe"
+          shutil.copy2(exe_src, os.path.join(app_dir, "手机回收价格秒查工具.exe"))
+
+          # 2. 复制 data 目录下的所有标准 CSV
+          data_path = "data"
+          for f in os.listdir(data_path):
+              if f.endswith(".csv"):
+                  shutil.copy2(os.path.join(data_path, f), os.path.join(app_dir, "data", f))
+
+          # 3. 制作 ZIP
+          with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
+              for root, dirs, files in os.walk(app_dir):
+                  for f in files:
+                      zf.write(os.path.join(root, f), os.path.join(os.path.relpath(root, app_dir), f))
+
+      - name: 上传构建产物到 Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows_App_Package
+          path: PhonePriceSearch_Windows.zip
+
+      - name: 发布到 GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          # 确定版本号：优先使用输入的版本，否则使用 Git Tag
+          TAG="${{ github.event.inputs.version_tag }}"
+          if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          
+          echo "正在发布版本: $TAG"
+
+          gh release create "$TAG" PhonePriceSearch_Windows.zip \
+            --title "手机回收报价工具 $TAG" \
+            --notes "此版本包含最新的标准 10 列价格 CSV 数据。下载后解压，直接运行 EXE 即可使用。" \
+            || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
