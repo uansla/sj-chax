@@ -8,7 +8,7 @@ on:
 
 jobs:
   auto-sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
@@ -20,14 +20,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
 
-      - name: 安装依赖
+      - name: 安装环境依赖
         run: |
           pip install requests beautifulsoup4 pillow rapidocr_onnxruntime
 
-      - name: 执行自动化爬虫与 OCR 流水线
+      - name: 执行 10 列标准自动化流水线
         run: |
-          # 确保调用的是最新的 10 列标准脚本
           python auto_pipeline.py
 
       - name: 提交并推送数据更新
@@ -35,15 +35,16 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 添加图片和数据目录
-          git add images/*.jpg
-          git add data/*.csv
-          git add data/price_history.json
+          # 核心修复：直接 add 整个目录，如果目录不存在则创建一个空的，避免报错
+          mkdir -p data images
+          git add data/
+          git add images/
           
+          # 检查是否有变动
           if git diff --staged --quiet; then
-            echo "今日价格无变动，跳过提交。"
+            echo "今日价格数据无变动，跳过提交。"
           else
             echo "检测到数据变动，正在同步到仓库..."
-            git commit -m "Auto: 自动同步最新回收报价 [$(date +'%Y-%m-%d')]"
+            git commit -m "Auto: 同步最新回收报价 (10列标准) [$(date +'%Y-%m-%d')]"
             git push origin main
           fi
