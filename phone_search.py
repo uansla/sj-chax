@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import subprocess
 
-# 开启 Windows 高分屏缩放优化
+# 开启 Windows 高分屏缩放优化 (防止模糊)
 try:
     from ctypes import windll
     windll.shcore.SetProcessDpiAwareness(1)
@@ -16,71 +16,107 @@ except:
 class PhonePriceSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("数码回收价格秒查工具 - 10列专业版")
-        self.root.geometry("1400x750")
+        self.root.title("数码回收价格秒查工具 - 专业大字版")
+        self.root.geometry("1500x850")
 
-        # --- 核心路径逻辑修正 ---
+        # --- 路径逻辑 ---
         if getattr(sys, 'frozen', False):
-            # 如果是打包后的 EXE 运行，路径为 EXE 所在目录
             self.base_dir = os.path.dirname(sys.executable)
         else:
-            # 如果是脚本运行，路径为脚本所在目录
             self.base_dir = os.path.dirname(os.path.abspath(__file__))
         
         self.data_dir = os.path.join(self.base_dir, "data")
-        
-        # 自动创建 data 文件夹（如果不存在）
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
 
         self.all_data = []
+        
+        # --- 样式配置 ---
+        self.style = ttk.Style()
+        self.style.theme_use("clam") # 使用 clam 主题以获得更好的样式自定义支持
+        
+        # 配置全局字体
+        self.font_main = ("微软雅黑", 12)
+        self.font_bold = ("微软雅黑", 12, "bold")
+        self.font_header = ("微软雅黑", 13, "bold")
+        self.font_search = ("微软雅黑", 14)
+
+        # 自定义 Treeview 样式
+        self.style.configure("Custom.Treeview", 
+                             font=self.font_main, 
+                             rowheight=35, # 大幅增加行高
+                             background="white",
+                             foreground="black",
+                             fieldbackground="white")
+        
+        self.style.configure("Custom.Treeview.Heading", 
+                             font=self.font_header, 
+                             background="#eeeeee")
+        
+        # 选中行的颜色
+        self.style.map("Custom.Treeview", 
+                       background=[('selected', '#0078d7')],
+                       foreground=[('selected', 'white')])
+
         self._setup_ui()
         self.load_all_data()
 
     def _setup_ui(self):
         # 顶部工具栏
-        top_frame = ttk.Frame(self.root, padding=10)
+        top_frame = ttk.Frame(self.root, padding=15)
         top_frame.pack(fill=tk.X)
 
         # 1. 搜索框
-        ttk.Label(top_frame, text="关键词搜索:", font=("微软雅黑", 10)).pack(side=tk.LEFT)
+        ttk.Label(top_frame, text="🔍 搜索型号/品牌:", font=self.font_header).pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *args: self.do_search())
-        self.search_entry = ttk.Entry(top_frame, textvariable=self.search_var, width=40)
-        self.search_entry.pack(side=tk.LEFT, padx=10)
         
-        # 2. 刷新按钮
-        ttk.Button(top_frame, text="🔄 刷新/重载数据", command=self.load_all_data).pack(side=tk.LEFT, padx=5)
+        # 设置搜索框字体大一些
+        self.search_entry = tk.Entry(top_frame, textvariable=self.search_var, 
+                                     font=self.font_search, width=40, relief="solid", borderwidth=1)
+        self.search_entry.pack(side=tk.LEFT, padx=15, ipady=3)
         
-        # 3. 打开文件夹按钮
-        ttk.Button(top_frame, text="📂 打开数据文件夹", command=self.open_data_folder).pack(side=tk.LEFT, padx=5)
+        # 2. 按钮 (加大字号)
+        btn_refresh = tk.Button(top_frame, text="🔄 刷新数据", command=self.load_all_data,
+                                font=self.font_main, bg="#f0f0f0", padx=10)
+        btn_refresh.pack(side=tk.LEFT, padx=5)
+        
+        btn_folder = tk.Button(top_frame, text="📂 打开数据夹", command=self.open_data_folder,
+                               font=self.font_main, bg="#f0f0f0", padx=10)
+        btn_folder.pack(side=tk.LEFT, padx=5)
 
-        # 提示文本
-        self.status_label = ttk.Label(top_frame, text="", foreground="blue")
+        # 右侧统计
+        self.status_label = ttk.Label(top_frame, text="", font=self.font_main, foreground="#666666")
         self.status_label.pack(side=tk.RIGHT)
 
         # 表格区域
         self.columns = [
-            ("source", "品牌/文件", 80),
-            ("series", "系列", 100),
-            ("model", "机型/规格配置", 280),
-            ("p1", "开机靓好", 85),
-            ("p2", "开机好碎", 85),
-            ("p3", "开机碎屏", 85),
-            ("p4", "开机压屏", 85),
-            ("p5", "不开机", 85),
-            ("p6", "废板-整机", 85),
-            ("remark", "备注", 250)
+            ("source", "品牌", 90),
+            ("series", "系列", 110),
+            ("model", "机型规格 (搜索结果)", 320),
+            ("p1", "靓好", 100),
+            ("p2", "好碎", 100),
+            ("p3", "碎屏", 100),
+            ("p4", "压屏", 100),
+            ("p5", "不开机", 100),
+            ("p6", "废板", 100),
+            ("remark", "备注说明", 300)
         ]
 
         table_frame = ttk.Frame(self.root)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
         
-        self.tree = ttk.Treeview(table_frame, columns=[c[0] for c in self.columns], show="headings")
+        self.tree = ttk.Treeview(table_frame, columns=[c[0] for c in self.columns], 
+                                 show="headings", style="Custom.Treeview")
+        
+        # 配置列标题和宽度
         for col_id, col_name, width in self.columns:
             self.tree.heading(col_id, text=col_name)
-            self.tree.column(col_id, width=width, anchor=tk.W)
+            # 价格列居中对齐，机型和备注左对齐
+            align = tk.CENTER if col_id.startswith('p') else tk.W
+            self.tree.column(col_id, width=width, anchor=align)
 
+        # 滚动条
         vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -92,8 +128,12 @@ class PhonePriceSearchApp:
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
 
+        # 隔行变色配置
+        self.tree.tag_configure('oddrow', background='#f9f9f9')
+        self.tree.tag_configure('evenrow', background='#ffffff')
+        # 特别加粗价格列 (通过 tag 整体设置较难，这里通过数据逻辑区分)
+
     def open_data_folder(self):
-        """打开 data 文件夹，方便用户放入新的 CSV"""
         try:
             if sys.platform == "win32":
                 os.startfile(self.data_dir)
@@ -103,7 +143,6 @@ class PhonePriceSearchApp:
             messagebox.showerror("错误", f"无法打开文件夹: {e}")
 
     def load_all_data(self):
-        """扫描 data 目录下的所有 CSV 并加载"""
         self.all_data.clear()
         csv_files = glob.glob(os.path.join(self.data_dir, "*.csv"))
         
@@ -111,7 +150,6 @@ class PhonePriceSearchApp:
         for f_path in csv_files:
             brand = os.path.basename(f_path).replace(".csv", "")
             try:
-                # 依次尝试 utf-8-sig 和 gbk 编码，解决不同来源 CSV 的乱码问题
                 try:
                     with open(f_path, "r", encoding="utf-8-sig") as f:
                         reader = list(csv.DictReader(f))
@@ -120,7 +158,6 @@ class PhonePriceSearchApp:
                         reader = list(csv.DictReader(f))
 
                 for row in reader:
-                    # 适配 10 列标准，同时兼容各种旧表头名
                     self.all_data.append({
                         "source": brand,
                         "series": row.get("系列") or brand,
@@ -135,9 +172,9 @@ class PhonePriceSearchApp:
                     })
                 count += 1
             except Exception as e:
-                print(f"文件 {f_path} 加载失败: {e}")
+                print(f"加载失败 {f_path}: {e}")
         
-        self.status_label.config(text=f"已加载 {count} 个表格, 共 {len(self.all_data)} 条数据")
+        self.status_label.config(text=f"已加载 {count} 个品牌, 共 {len(self.all_data)} 行数据")
         self.do_search()
 
     def do_search(self):
@@ -145,15 +182,23 @@ class PhonePriceSearchApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
+        row_idx = 0
         for d in self.all_data:
             if not query or query in d['model'].lower() or query in d['source'].lower() or query in d['series'].lower():
+                tag = 'oddrow' if row_idx % 2 == 0 else 'evenrow'
                 self.tree.insert("", tk.END, values=(
                     d['source'], d['series'], d['model'],
                     d['p1'], d['p2'], d['p3'], d['p4'], d['p5'], d['p6'],
                     d['remark']
-                ))
+                ), tags=(tag,))
+                row_idx += 1
 
 if __name__ == "__main__":
     root = tk.Tk()
+    # 强制窗口在最前弹出一次，然后恢复正常
+    root.lift()
+    root.attributes('-topmost', True)
+    root.after(500, lambda: root.attributes('-topmost', False))
+    
     app = PhonePriceSearchApp(root)
     root.mainloop()
