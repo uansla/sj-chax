@@ -3,22 +3,23 @@ name: Build and Publish Windows App
 on:
   push:
     tags:
-      - 'v*' 
+      - 'v*'
   workflow_dispatch:
     inputs:
       version_tag:
-        description: '发布版本号'
-        required: false
+        description: '发布版本号，例如 v1.2.0'
+        required: true
         default: 'v1.0.0'
+
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: 'utf-8'
 
 jobs:
   build-and-release:
     runs-on: windows-latest
     permissions:
       contents: write
-    
-    env:
-      PYTHONUTF8: 1
 
     steps:
       - name: 检出代码
@@ -27,59 +28,115 @@ jobs:
       - name: 配置 Python 环境
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: 安装打包工具
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: 构建前检查
+        shell: python
         run: |
-          pip install pyinstaller
+          import csv
+          import glob
+          import os
+          import py_compile
+
+          py_compile.compile('phone_search.py', doraise=True)
+
+          data_files = [
+              p for p in glob.glob(os.path.join('data', '*'))
+              if os.path.isfile(p) and p.lower().endswith('.csv')
+          ]
+          if not data_files:
+              raise SystemExit('错误：data 目录中没有 CSV 数据文件，停止发布。')
+
+          total_rows = 0
+          for path in data_files:
+              with open(path, 'r', encoding='utf-8-sig', newline='') as f:
+                  total_rows += sum(1 for row in csv.reader(f) if any(str(x).strip() for x in row))
+
+          print(f'发现 {len(data_files)} 个 CSV 文件，非空行共 {total_rows} 行。')
+          if total_rows < len(data_files):
+              raise SystemExit('错误：CSV 数据疑似为空，停止发布。')
 
       - name: 使用 PyInstaller 打包 EXE
-        run: |
-          # 打包为单文件 SearchTool.exe
-          pyinstaller -F -w --name "SearchTool" phone_search.py
+        run: python -m PyInstaller --clean -F -w --name "SearchTool" phone_search.py
 
       - name: 自动化整合发布包
         shell: python
         run: |
-          import os, shutil, zipfile
+          import os
+          import shutil
+          import zipfile
 
-          app_dir = "Recycle_Tool_App"
-          zip_name = "PhonePriceSearch_Windows.zip"
+          app_dir = 'Recycle_Tool_App'
+          zip_name = 'PhonePriceSearch_Windows.zip'
 
-          if os.path.exists(app_dir): shutil.rmtree(app_dir)
-          os.makedirs(app_dir, exist_ok=True)
-          os.makedirs(os.path.join(app_dir, "data"), exist_ok=True)
+          if os.path.exists(app_dir):
+              shutil.rmtree(app_dir)
+          if os.path.exists(zip_name):
+              os.remove(zip_name)
 
-          # 1. 复制 EXE
-          shutil.copy2("dist/SearchTool.exe", os.path.join(app_dir, "手机回收价格秒查工具.exe"))
-          
-          # 2. 复制 data 目录下的所有 CSV（如果存在）
-          data_path = "data"
-          if os.path.exists(data_path):
-              for f in os.listdir(data_path):
-                  if f.lower().endswith(".csv"):
-                      shutil.copy2(os.path.join(data_path, f), os.path.join(app_dir, "data", f))
+          os.makedirs(os.path.join(app_dir, 'data'), exist_ok=True)
 
-          # 3. 创建 ZIP (重点：必须相对于 app_dir 打包，确保解压后是一个文件夹)
-          with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
-              for root, dirs, files in os.walk(app_dir):
-                  for f in files:
-                      full_path = os.path.join(root, f)
-                      # 保持压缩包内的相对路径结构
+          # EXE 与 data 必须同级，phone_search.py 会从 EXE 所在目录读取 data。
+          shutil.copy2('dist/SearchTool.exe', os.path.join(app_dir, '手机回收价格秒查工具.exe'))
+
+          data_path = 'data'
+          copied = 0
+          for name in os.listdir(data_path):
+              src = os.path.join(data_path, name)
+              if os.path.isfile(src) and name.lower().endswith('.csv'):
+                  shutil.copy2(src, os.path.join(app_dir, 'data', name))
+                  copied += 1
+
+          if copied == 0:
+              raise SystemExit('错误：发布包没有复制到任何 CSV 文件。')
+
+          # 额外放入说明文件，避免用户不知道目录结构。
+          with open(os.path.join(app_dir, '使用说明.txt'), 'w', encoding='utf-8') as f:
+              f.write(
+                  '手机回收价格秒查工具\n\n'
+                  '1. 请保持“手机回收价格秒查工具.exe”和 data 文件夹在同一目录。\n'
+                  '2. 双击 EXE 即可使用。\n'
+                  '3. 更新报价时，只需要替换 data 文件夹中的 CSV，不需要重新打包 EXE。\n'
+              )
+
+          with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+              for root, _, files in os.walk(app_dir):
+                  for name in files:
+                      full_path = os.path.join(root, name)
                       rel_path = os.path.relpath(full_path, app_dir)
                       zf.write(full_path, rel_path)
-          
-          print("Packaging complete.")
+
+          print(f'发布包构建完成：{zip_name}，CSV 文件：{copied} 个。')
+
+      - name: 确定发布版本号
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version_tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "错误：版本号必须类似 v1.2.0"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "使用版本号：$TAG"
 
       - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.version_tag }}"
-          [ -z "$TAG" ] || [ "$TAG" == "null" ] && TAG="${{ github.ref_name }}"
-          
           gh release create "$TAG" PhonePriceSearch_Windows.zip \
             --title "手机回收报价工具 $TAG" \
-            --notes "修正了路径识别问题，新增打开文件夹和手动刷新功能。请解压后直接运行 EXE。" \
+            --notes "修复 CSV 多表头读取、补全报价字段、增加清空搜索功能，并将 data CSV 一并打包。请解压后保持 EXE 与 data 文件夹同级。" \
             || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
