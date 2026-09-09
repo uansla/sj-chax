@@ -1,1 +1,8 @@
-pyinstaller
+# 自动同步 / OCR 依赖
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+Pillow>=10,<13
+rapidocr_onnxruntime>=1.4,<2
+
+# Windows EXE 打包
+pyinstaller>=6,<7
