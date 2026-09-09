@@ -1,125 +1,113 @@
-# 📱 手机与数码设备回收价格自动同步与秒查工具 (sj-chax)
+# 📱 手机回收价格秒查工具（sj-chax）
 
-[![Python Version](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-Auto%20Sync-orange.svg)](#-自动化同步流程)
+一个基于 Python/Tkinter 的 Windows 手机回收价格查询工具。程序从 EXE 同级的 `data/` 目录读取 CSV，不把价格数据写死在 EXE 中，因此更新 CSV 后无需重新编译程序。
 
-一个面向数码回收从业者、二手商贩与消费者的**自动化回收报价追踪与本地高速检索工具**。
+## ✨ 当前功能
 
-本项目通过云端定时监控抓取「数码回收网」最新价格变动，自动格式化存储为结构化 CSV 表格，并配合本地轻量级桌面检索工具，实现**毫秒级模糊查价、零编译热更新**，告别繁琐的手动翻表！
+- 🔍 输入型号、品牌、系列或价格信息即可实时模糊搜索。
+- ✕ 搜索框提供一键清空按钮，旁边也提供“清空”按钮。
+- 🔄 支持手动刷新 CSV 数据。
+- 📂 支持直接打开 EXE 同级的 `data` 数据目录。
+- 📊 支持不同 CSV 使用不同表头，并支持一个 CSV 内存在多段表格/表头。
+- 📋 查询界面包含品牌、系列、序号、机型规格、网络型号、靓好、好屏、碎屏、坏配件、不开机、废板、统货、备注等字段。
+- 🖥️ Windows 高 DPI 适配，使用 Tkinter，无第三方 GUI 框架。
+- 📦 GitHub Actions 自动构建 Windows EXE，并将 `data/` 中全部 CSV 一起放入发布 ZIP。
 
----
-
-## ✨ 核心特性
-
-- 🔄 **云端定时全自动同步**：基于 GitHub Actions 每天清晨定时监控数码回收网，一旦有价格调整，自动提交推送最新 CSV 表格，**零云服务器成本**。
-- ⚡ **毫秒级模糊即输即查**：本地工具内置智能模糊匹配引擎，自动忽略大小写、空格与破折号（如输入 `15pro`、`fold5`、`reno11` 瞬间出价）。
-- 📦 **软件与数据完全解耦**：桌面程序与 `data/` 目录下的 CSV 表格完全分离。更新报价只需拉取最新代码或替换文件，**无需重新打包 EXE**。
-- 🔍 **双击查看全量质检细则**：支持各品牌特有报价梯队（苹果无ID版、三星大/小老化档位、折痕扣减、镜头刮花扣款等），双击任意行即可弹窗展开完整条款。
-- 🖥️ **原生零依赖与高分屏优化**：GUI 仅依赖 Python 原生标准库（Tkinter），无需额外安装庞大的第三方 GUI 框架，内置 Windows 高 DPI 适配，界面清晰不模糊。
-
----
-
-## 📂 仓库目录结构
+## 📂 仓库结构
 
 ```text
 sj-chax/
 ├── .github/
 │   └── workflows/
-│       ├── auto_sync.yml       # GitHub Actions 每天自动抓取并提交最新价格
-│       └── build.yml           # (可选) 自动打包发布 Windows EXE
-├── data/                       # 存放各品牌标准化的回收价格 CSV 表格
-│   ├── Apple.csv
-│   ├── OPPO.csv
-│   ├── Vivo.csv
-│   ├── Samsung.csv
-│   ├── Huawei_Honor.csv
-│   ├── Xiaomi_Redmi.csv
-│   └── ...
-├── phone_search.py             # 桌面快速查价 GUI 工具 (支持实时搜索、排序、弹窗)
-├── update_prices.py            # 数码回收网数据抓取与解析引擎
-├── requirements.txt            # 运行依赖 (爬虫依赖 requests, beautifulsoup4)
-├── .gitignore                  # Git 忽略文件配置
-└── README.md                   # 项目说明文档
+│       ├── build_and_release.yml    # Windows EXE 自动构建与发布
+│       └── daily_auto_sync.yml      # 每日自动抓取/OCR 同步
+├── data/                            # 手机回收价格 CSV
+├── images/                          # OCR/同步使用的图片
+├── phone_search.py                  # Windows 桌面查询程序
+├── auto_pipeline.py                 # 自动抓取、OCR、CSV 同步
+├── ocr_update.py                    # 本地图片 OCR 更新工具
+├── requirements.txt                 # 项目依赖
+├── .gitignore
+└── README.md
+```
 
+## 🚀 本地运行
 
-## 🚀 快速上手
-1. 本地运行查价小工具
+### 1. 直接运行查询工具
 
-由于桌面查价工具仅使用 Python 标准库，克隆后可直接双击或命令行启动：
-code Bash
+查询程序只依赖 Python 标准库中的 Tkinter：
 
-# 1. 克隆本仓库到本地
+```bash
 git clone https://github.com/uansla/sj-chax.git
 cd sj-chax
-
-# 2. 直接启动查询界面
 python phone_search.py
+```
 
-    小技巧：在 Windows 上，您也可以将 phone_search.py 创建一个快捷方式放到桌面，双击即开即用。
+Windows 如果已经安装 Python，也可以直接双击 `phone_search.py`。
 
-2. 打包为绿色版独立 EXE（可选）
+### 2. 安装自动同步/OCR依赖
 
-如果您希望分发给不熟悉 Python 的同事或直接制作独立的 .exe 文件：
-code Bash
+```bash
+python -m pip install -r requirements.txt
+```
 
-# 安装 PyInstaller 打包工具
-pip install pyinstaller
+## 📦 Windows EXE 自动打包
 
-# 编译为纯单文件应用程序 (注意：切勿添加 --add-data 参数，保持数据独立)
-pyinstaller -F -w --name "手机回收价格秒查工具" phone_search.py
+GitHub Actions 工作流：`.github/workflows/build_and_release.yml`。
 
-打包完成后，进入 dist/ 目录，将生成的 手机回收价格秒查工具.exe 与 data 文件夹放在同级目录即可随身携带或压缩分享：
-code Text
+触发方式：
 
-📁 手机回收价格秒查工具/
-├── 手机回收价格秒查工具.exe
-└── 📁 data/
-    ├── Apple.csv
-    ├── OPPO.csv
+1. 推送 `v*` 格式的 Git Tag，例如 `v1.2.0`。
+2. 在 GitHub Actions 中手动运行，并填写版本号，例如 `v1.2.0`。
+
+构建过程会先检查 `phone_search.py` 语法和 `data/` 是否存在 CSV，然后使用 PyInstaller 构建单文件 EXE。之后会创建：
+
+```text
+PhonePriceSearch_Windows.zip
+└── 手机回收价格秒查工具.exe
+└── 使用说明.txt
+└── data/
+    ├── *.csv
     └── ...
+```
 
-🤖 自动化价格同步流程
+**注意：EXE 和 `data` 文件夹必须保持同级。** 程序启动后会自动读取 EXE 所在目录下的 `data/`。
 
-本项目通过 .github/workflows/auto_sync.yml 实现每天全自动跟进市场价格：
+因此以后只需要替换 `data/` 里的 CSV，就可以更新报价，不需要重新编译 EXE。
 
-    触发时间：每天 UTC 00:30（北京时间早晨 08:30）自动运行。
+## 🤖 每日自动同步
 
-    运行机制：GitHub Actions 唤起 Python 爬虫 update_prices.py 扫描网站数据。
+`.github/workflows/daily_auto_sync.yml` 每天 UTC 00:30（北京时间 08:30）运行 `auto_pipeline.py`。
 
-    自动提交：若比对发现价格或机型发生变动，自动执行 git commit 并推送到 main 分支；若无变动则静默退出。
+流水线会：
 
-⚙️ 仓库必要配置（关键）
+1. 从目标网站抓取图片。
+2. 使用 RapidOCR 识别价格表。
+3. 将识别结果写入 `data/`。
+4. 将发生变化的 `data/` 和 `images/` 提交到 `main`。
 
-为了让 GitHub Actions 机器人有权限向您的仓库推送更新好的 CSV，请务必开启写入权限：
+为避免 OCR/网络异常导致数据被清空，当前程序在没有得到有效价格行时不会覆盖原 CSV。
 
-    打开 GitHub 仓库，点击 Settings -> 左侧 Actions -> General；
+GitHub Actions 需要仓库具有 `contents: write` 权限。工作流已经声明该权限；如果仓库设置限制了 Actions 写权限，请在仓库 Settings → Actions → General → Workflow permissions 中允许写入。
 
-    找到 Workflow permissions 区域；
+## 📋 CSV 数据兼容说明
 
-    选择 Read and write permissions 并勾选下方的 Allow GitHub Actions to create and approve pull requests；
+查询程序不会要求所有 CSV 必须使用完全相同的表头。它会自动识别常见字段，例如：
 
-    点击 Save 保存。
+- `品牌/系列`、`系列分类`、`系列` → 系列
+- `机型与规格`、`机型及规格`、`型号` → 机型规格
+- `网络制式型号`、`网络型号`、`网络制式` → 网络型号
+- `开机靓好`、`靓好` → 靓好
+- `开机好碎`、`开机好屏`、`好碎`、`好屏` → 好屏
+- `开机碎屏`、`开机屏坏` → 碎屏
+- `开机坏配件`、`开机压屏` → 坏配件
+- `废板·整机`、`废板-整机`、`废板` → 废板
+- `统货`、`开机无灯光` → 统货
 
-📋 数据标准与回收等级说明
+界面统一显示为 **“好屏”**，旧数据中仍然存在的 `好碎` 字段也可以继续读取。
 
-data/ 目录下的 CSV 表格均遵循统一的质量标准评级：
-评级代号	等级定义	判定标准概述
-K1 等级	开机屏好 / 靓好	开机正常进系统，内外屏完好，无压伤无老化，主板功能全正常；三星冷光屏外裂内好触摸正常算屏好。
-H3 等级	开机屏坏	开机正常进系统，屏幕碎裂或缺失，主板无进水腐蚀、无断板、无大修、无严重变形。
-F1 等级	不开机	主板无严重维修、无腐蚀压伤、芯片完好；整机零件无缺失（反复重启、进不去系统均算不开机）。
-F3 等级	废板 · 整机	压伤严重、严重腐蚀进水、断线大修等，要求主芯片完好。
+## ⚠️ 使用说明
 
-    注：苹果的“无ID靓板/不靓板”、三星的“微老化/重度老化扣款”、折叠屏的“折痕大扣费”等特例条款，均保存在各 CSV 的 备注 字段中，在查询工具中双击对应行即可弹出卡片完整查看。
+回收价格数据仅供行情参考。实际成交价格以回收平台或回收商当日质检结果为准。
 
-🤝 贡献与支持
-
-    提交新机型/反馈异常：欢迎提交 Issues 反馈错价或未收录的型号。
-
-    改进检索工具：欢迎提交 Pull Requests 帮助扩充功能（如价格走势图、数据导出、微信小程序适配等）。
-
-⚠️ 免责声明
-
-    本项目内整理的回收数据均源自网络公开页面，仅供技术研究、二手行情参考与个人学习交流使用。
-
-    实际回收成交以各大平台或回收商质检当日最终出价为准，请遵守各平台服务条款与法律法规，切勿用于商业欺诈或违规炒货。
+项目中的网络抓取/OCR 功能依赖目标网站结构；如果网站页面或图片格式发生变化，自动同步可能需要相应调整。
