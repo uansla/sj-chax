@@ -176,7 +176,7 @@ def valid_quote_rows(header: list[str], rows: list[list[str]]) -> list[dict[str,
     return output
 
 
-def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str) -> Path:
+def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str, data_dir: Path | str | None = None) -> Path:
     # 每份报价保留原网站的不同报价档位，便于后续扩展展示字段。
     all_fields = []
     for row in rows:
@@ -185,7 +185,8 @@ def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], sou
                 all_fields.append(field)
     headers = ["报价日期", "系列", "型号"] + [x for x in all_fields if x != "型号"] + ["来源"]
     safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
-    brand_dir = DATA_DIR / safe_brand
+    output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
+    brand_dir = output_dir / safe_brand
     target = brand_dir / f"{quote_date.isoformat()}_{safe_brand}.csv"
     brand_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=brand_dir, delete=False) as tmp:
@@ -209,9 +210,11 @@ def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
     return removed
 
 
-def run_pipeline(progress=None) -> dict[str, int]:
+def run_pipeline(progress=None, data_dir: Path | str | None = None) -> dict[str, int]:
     """下载二手手机分类下所有品牌自 2026-10-01 起的报价。"""
     report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0}
+    output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
     session.headers.update(HEADERS)
     index = fetch_soup(session, INDEX_URL)
@@ -221,7 +224,7 @@ def run_pipeline(progress=None) -> dict[str, int]:
         raise RuntimeError("报价总览页没有找到品牌报价入口，网站页面可能已调整。")
     for brand, _ in brands:
         folder = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
-        (DATA_DIR / folder).mkdir(parents=True, exist_ok=True)
+        (output_dir / folder).mkdir(parents=True, exist_ok=True)
 
     def process_brand(brand: str, brand_url: str) -> dict[str, int]:
         result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0}
@@ -239,7 +242,7 @@ def run_pipeline(progress=None) -> dict[str, int]:
                     if not rows:
                         result["errors"] += 1
                         continue
-                    write_snapshot(brand, quote_date, rows, article_url)
+                    write_snapshot(brand, quote_date, rows, article_url, output_dir)
                     result["snapshots"] += 1
                     result["rows"] += len(rows)
                     time.sleep(0.05)
