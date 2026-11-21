@@ -219,7 +219,7 @@ class PhonePriceSearchApp:
                 if error:
                     base = self.status_label.cget("text").split(" | 当前搜索", 1)[0]
                     self.status_label.config(text=base + " · 联网更新失败（保留本地数据）")
-                messagebox.showwarning("联网更新失败", f"无法更新报价：\n{error}\n\n已保留本地已有数据。请检查网络后点击“更新官网报价”。")
+                    messagebox.showwarning("联网更新失败", f"无法更新报价：\n{error}\n\n已保留本地已有数据。请检查网络后点击“更新官网报价”。")
                 else:
                     self.status_label.config(text=f"更新完成：{result['snapshots']} 份报价 / {result['rows']} 条机型 · {datetime.now():%H:%M}")
             self.root.after(0, finish)
