@@ -14,3 +14,7 @@ dist/
 # 临时文件
 *.tmp
 *.log
+
+# 用户本地行情数据，不提交到 GitHub
+/data/
+app_settings.json

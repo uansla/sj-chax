@@ -1,204 +1,268 @@
+"""从数码回收网报价历史页抓取各品牌最近七份报价表。"""
+
+from __future__ import annotations
+
 import csv
-import hashlib
-import json
 import os
 import re
-from datetime import datetime
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image
-
-try:
-    from rapidocr_onnxruntime import RapidOCR
-    ocr_engine = RapidOCR()
-except ImportError:
-    ocr_engine = None
 
 BASE_URL = "https://www.smhsw.com"
-INDEX_URL = "https://www.smhsw.com/index/index/index.html"
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-IMAGE_DIR = os.path.join(REPO_ROOT, "images")
-DATA_DIR = os.path.join(REPO_ROOT, "data")
-HISTORY_FILE = os.path.join(DATA_DIR, "price_history.json")
-
-# 与查询程序兼容的完整字段。OCR 无法识别的字段保持为空，避免查询程序丢列。
-CSV_HEADERS = [
-    "系列", "序号", "型号", "网络制式型号", "开机靓好", "开机好碎",
-    "开机碎屏", "开机坏配件", "不开机", "废板·整机", "统货", "备注"
-]
-
-os.makedirs(IMAGE_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
-
+INDEX_URL = f"{BASE_URL}/home/quotation/more.html"
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": BASE_URL,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+    "Referer": INDEX_URL,
 }
+DATE_RE = re.compile(r"(?P<y>20\d{2})[年/-](?P<m>\d{1,2})[月/-](?P<d>\d{1,2})")
+MODEL_MARKERS = ("型号", "机型", "商品型号", "品名/型号")
+HISTORY_START = date(2026, 10, 1)
 
 
-def get_file_md5(filepath):
-    if not os.path.exists(filepath):
-        return ""
-    hash_md5 = hashlib.md5()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+def parse_date(value: str) -> date | None:
+    match = DATE_RE.search(value or "")
+    if not match:
+        return None
+    try:
+        return date(int(match["y"]), int(match["m"]), int(match["d"]))
+    except ValueError:
+        return None
 
 
-def crawl_and_download_images():
-    print(f"[{datetime.now()}] 正在抓取官网海报图片...")
+def fetch_soup(session: requests.Session, url: str) -> BeautifulSoup:
+    response = session.get(url, timeout=(10, 30))
+    response.raise_for_status()
+    response.encoding = response.apparent_encoding or "utf-8"
+    return BeautifulSoup(response.text, "html.parser")
+
+
+def find_brand_pages(soup: BeautifulSoup) -> list[tuple[str, str]]:
+    found = []
+    seen = set()
+    for anchor in soup.find_all("a", href=True):
+        href = urljoin(BASE_URL, anchor["href"])
+        if "/home/quotation/more/" not in urlparse(href).path:
+            continue
+        match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(href).path)
+        # 用户指定只抓“二手手机”下的品牌；其品牌入口均为 p_id=1 且 cat_id>0。
+        if not match or match.group(1) != "1" or match.group(2) == "0":
+            continue
+        brand = " ".join(anchor.get_text(" ", strip=True).split())
+        if not brand or brand in {"更多", "下一页", "上一页"}:
+            continue
+        key = (brand, href.rstrip("/"))
+        if key not in seen:
+            seen.add(key)
+            found.append((brand, href))
+    return found
+
+
+def find_recent_articles(soup: BeautifulSoup, start_date: date = HISTORY_START) -> list[tuple[date, str]]:
+    by_url = {}
+    today = date.today()
+    for anchor in soup.find_all("a", href=True):
+        href = urljoin(BASE_URL, anchor["href"])
+        path = urlparse(href).path
+        if "/home/quotation/index/" not in path:
+            continue
+        label = " ".join(anchor.get_text(" ", strip=True).split())
+        article_date = parse_date(href) or parse_date(label)
+        if article_date and start_date <= article_date <= today:
+            by_url[href] = article_date
+    return sorted(((d, u) for u, d in by_url.items()), reverse=True)
+
+
+def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[date, str]]:
+    """读取品牌报价列表及其分页，直到历史日期早于采集起点。"""
+    base_path = urlparse(brand_url).path.rstrip("/")
+    pending = [brand_url]
+    visited = set()
+    articles = {}
+    while pending and len(visited) < 12:
+        listing_url = pending.pop(0)
+        if listing_url in visited:
+            continue
+        visited.add(listing_url)
+        soup = fetch_soup(session, listing_url)
+        page_articles = find_recent_articles(soup, date.min)
+        for quote_date, article_url in page_articles:
+            if quote_date >= HISTORY_START:
+                articles[article_url] = quote_date
+        page_dates = [d for d, _ in page_articles]
+        if page_dates and min(page_dates) < HISTORY_START:
+            continue
+        for anchor in soup.find_all("a", href=True):
+            href = urljoin(BASE_URL, anchor["href"])
+            path = urlparse(href).path.rstrip("/")
+            if path.startswith(base_path) and href not in visited and href not in pending and href != brand_url:
+                # 限制在本品牌列表的分页链接，避免递归到其他品牌/详情页。
+                if "/home/quotation/index/" not in path:
+                    pending.append(href)
+    return sorted(((d, u) for u, d in articles.items()), reverse=True)
+
+
+def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
+    """选择包含型号表头的最大表格，跳过导航/页脚中的其他表格。"""
+    candidates = []
+    for table in soup.find_all("table"):
+        rows = []
+        for tr in table.find_all("tr"):
+            cells = tr.find_all(["th", "td"], recursive=False)
+            values = [" ".join(cell.stripped_strings).strip() for cell in cells]
+            if any(values):
+                rows.append(values)
+        for index, row in enumerate(rows):
+            if any(marker in cell.replace(" ", "") for cell in row for marker in MODEL_MARKERS):
+                header = row
+                body = [r for r in rows[index + 1:] if len(r) >= 2]
+                candidates.append((len(body), header, body))
+                break
+    if candidates:
+        _, header, rows = max(candidates, key=lambda item: item[0])
+        return header, rows
+
+    # 有些版本将报价表直接渲染为 div；保留对纯文本分隔表格的兼容。
+    text = soup.get_text("\n", strip=True)
+    lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+    header_index = next((i for i, line in enumerate(lines) if "型号" in line and re.search(r"开机|靓机|充新|靓好", line)), None)
+    if header_index is None:
+        return [], []
+    split = lambda line: [x.strip() for x in re.split(r"\s*[|｜\t]\s*", line.strip(" |｜")) if x.strip()]
+    header = split(lines[header_index])
+    body = []
+    for line in lines[header_index + 1:]:
+        row = split(line)
+        if len(row) >= 2:
+            body.append(row)
+    return header, body
+
+
+def clean_header(value: str, index: int) -> str:
+    value = re.sub(r"\s+", "", value).strip("*|｜")
+    return value or f"报价项{index}"
+
+
+def valid_quote_rows(header: list[str], rows: list[list[str]]) -> list[dict[str, str]]:
+    model_index = next((i for i, value in enumerate(header) if any(marker in value.replace(" ", "") for marker in MODEL_MARKERS)), None)
+    if model_index is None:
+        return []
+    headers = [clean_header(v, i + 1) for i, v in enumerate(header)]
+    output = []
+    for row in rows:
+        if model_index >= len(row):
+            continue
+        model = re.sub(r"\s+", " ", row[model_index]).strip()
+        if not model or model in MODEL_MARKERS or set(model) <= {"-", "—", "*", "="}:
+            continue
+        record = {"型号": model}
+        for i, value in enumerate(row[:len(headers)]):
+            if i == model_index:
+                continue
+            label = headers[i]
+            if label in ("型号", "序号"):
+                continue
+            record[label] = value.strip()
+        if any(re.search(r"\d", value) for key, value in record.items() if key != "型号"):
+            output.append(record)
+    return output
+
+
+def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str) -> Path:
+    # 每份报价保留原网站的不同报价档位，便于后续扩展展示字段。
+    all_fields = []
+    for row in rows:
+        for field in row:
+            if field not in all_fields:
+                all_fields.append(field)
+    headers = ["报价日期", "系列", "型号"] + [x for x in all_fields if x != "型号"] + ["来源"]
+    safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+    brand_dir = DATA_DIR / safe_brand
+    target = brand_dir / f"{quote_date.isoformat()}_{safe_brand}.csv"
+    brand_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=brand_dir, delete=False) as tmp:
+        writer = csv.DictWriter(tmp, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({"报价日期": quote_date.isoformat(), "系列": brand, "来源": source, **row})
+        temp_path = Path(tmp.name)
+    temp_path.replace(target)
+    return target
+
+
+def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
+    files = list(DATA_DIR.rglob("????-??-??_*.csv"))
+    removed = 0
+    for path in files:
+        file_date = parse_date(path.name)
+        if file_date and file_date < start_date:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
+def run_pipeline(progress=None) -> dict[str, int]:
+    """下载二手手机分类下所有品牌自 2026-10-01 起的报价。"""
+    report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0}
     session = requests.Session()
     session.headers.update(HEADERS)
-    try:
-        res = session.get(INDEX_URL, timeout=20)
-        res.raise_for_status()
-        res.encoding = res.apparent_encoding
-    except requests.RequestException as e:
-        print(f"网络错误: {e}")
-        return []
+    index = fetch_soup(session, INDEX_URL)
+    session.close()
+    brands = find_brand_pages(index)
+    if not brands:
+        raise RuntimeError("报价总览页没有找到品牌报价入口，网站页面可能已调整。")
+    for brand, _ in brands:
+        folder = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+        (DATA_DIR / folder).mkdir(parents=True, exist_ok=True)
 
-    soup = BeautifulSoup(res.text, "html.parser")
-    downloaded_images = []
-    known_brands = [
-        "Apple", "Huawei", "Honor", "OPPO", "VIVO", "Xiaomi", "Redmi",
-        "Samsung", "OnePlus", "Realme", "Meizu"
-    ]
-
-    for img in soup.find_all("img"):
-        src = img.get("data-src") or img.get("data-original") or img.get("src") or ""
-        alt = img.get("alt") or img.get("title") or ""
-        if not src or any(x in src.lower() for x in ("logo", "icon", "banner")):
-            continue
-        if not src.startswith(("http://", "https://")):
-            src = requests.compat.urljoin(BASE_URL, src)
-
-        brand_name = "Other"
-        for brand in known_brands:
-            if brand.lower() in (alt + src).lower():
-                brand_name = brand
-                break
-
-        save_path = os.path.join(IMAGE_DIR, f"{brand_name}.jpg")
+    def process_brand(brand: str, brand_url: str) -> dict[str, int]:
+        result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0}
+        if progress:
+            progress(f"正在更新 {brand}…")
+        worker_session = requests.Session()
+        worker_session.headers.update(HEADERS)
         try:
-            img_res = session.get(src, timeout=30)
-            img_res.raise_for_status()
-            new_md5 = hashlib.md5(img_res.content).hexdigest()
-            if new_md5 != get_file_md5(save_path):
-                with open(save_path, "wb") as f:
-                    f.write(img_res.content)
-                downloaded_images.append((brand_name, save_path))
-                print(f"下载新海报: {brand_name}.jpg")
-        except requests.RequestException as e:
-            print(f"图片下载失败 {src}: {e}")
+            articles = find_article_pages(worker_session, brand_url)
+            for quote_date, article_url in articles:
+                try:
+                    page = fetch_soup(worker_session, article_url)
+                    header, raw_rows = parse_quote_table(page)
+                    rows = valid_quote_rows(header, raw_rows)
+                    if not rows:
+                        result["errors"] += 1
+                        continue
+                    write_snapshot(brand, quote_date, rows, article_url)
+                    result["snapshots"] += 1
+                    result["rows"] += len(rows)
+                    time.sleep(0.05)
+                except (requests.RequestException, ValueError, OSError):
+                    result["errors"] += 1
+        except (requests.RequestException, ValueError, OSError):
+            result["errors"] += 1
+        finally:
+            worker_session.close()
+        return result
 
-    return downloaded_images
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(process_brand, brand, url) for brand, url in brands]
+        for future in as_completed(futures):
+            result = future.result()
+            for key in report:
+                report[key] += result[key]
 
-
-def slice_and_ocr_long_image(image_path, slice_height=2000):
-    if ocr_engine is None:
-        raise RuntimeError("未安装 rapidocr_onnxruntime，请先执行 pip install -r requirements.txt")
-
-    all_ocr_lines = []
-    with Image.open(image_path) as img:
-        width, height = img.size
-        step = max(1, slice_height - 100)
-        y = 0
-        while y < height:
-            box_bottom = min(y + slice_height, height)
-            slice_img = img.crop((0, y, width, box_bottom))
-            result, _ = ocr_engine(slice_img)
-            if result:
-                for item in result:
-                    if len(item) >= 2 and str(item[1]).strip():
-                        all_ocr_lines.append(str(item[1]).strip())
-            y += step
-    return all_ocr_lines
-
-
-def parse_and_sync_prices(brand_name, ocr_lines):
-    target_csv = os.path.join(DATA_DIR, f"{brand_name}.csv")
-    parsed_rows = []
-    idx = 1
-
-    history_data = {}
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                history_data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            history_data = {}
-
-    for text in ocr_lines:
-        parts = re.split(r"[\s\t|,，/]+", text)
-        digits = [p for p in parts if re.fullmatch(r"\d+(?:\.\d+)?", p)]
-        if len(parts) < 2 or not digits:
-            continue
-
-        model = parts[0].strip()
-        if model in {"型号", "序号", "机型", "开机靓好"}:
-            continue
-
-        prices = [digits[i] if i < len(digits) else digits[-1] for i in range(6)]
-        remark = parts[-1] if not re.fullmatch(r"\d+(?:\.\d+)?", parts[-1]) else ""
-
-        parsed_rows.append({
-            "系列": brand_name,
-            "序号": str(idx),
-            "型号": model,
-            "网络制式型号": "",
-            "开机靓好": prices[0],
-            "开机好碎": prices[1],
-            "开机碎屏": prices[2],
-            "开机坏配件": prices[3],
-            "不开机": prices[4],
-            "废板·整机": prices[5],
-            "统货": "",
-            "备注": remark,
-        })
-        idx += 1
-
-    # OCR 结果为空时绝不覆盖已有数据，避免网络/OCR 异常导致整张价格表被清空。
-    if not parsed_rows:
-        print(f"⚠️ {brand_name} 未得到有效价格行，保留原 CSV，不执行覆盖。")
-        return
-
-    with open(target_csv, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
-        writer.writeheader()
-        writer.writerows(parsed_rows)
-    print(f"CSV同步完成: {brand_name}.csv, 共 {len(parsed_rows)} 行")
-
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history_data, f, ensure_ascii=False, indent=2)
-
-
-def run_pipeline():
-    if ocr_engine is None:
-        raise RuntimeError("未安装 rapidocr_onnxruntime，请先执行 pip install -r requirements.txt")
-
-    updated = crawl_and_download_images()
-    if updated:
-        process_list = updated
-    else:
-        process_list = [
-            (os.path.splitext(name)[0], os.path.join(IMAGE_DIR, name))
-            for name in os.listdir(IMAGE_DIR)
-            if name.lower().endswith((".jpg", ".jpeg", ".png"))
-        ]
-
-    if not process_list:
-        print("没有可处理的图片，流水线结束。")
-        return
-
-    for brand, img_path in process_list:
-        try:
-            lines = slice_and_ocr_long_image(img_path)
-            parse_and_sync_prices(brand, lines)
-        except Exception as e:
-            print(f"处理 {brand} 失败: {e}")
+    # 保留用户自行放入 data/ 的 CSV，不清理本地文件。
+    return report
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    started = datetime.now()
+    result = run_pipeline(print)
+    print(f"完成：{result}，耗时 {datetime.now() - started}")

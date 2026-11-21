@@ -1,5 +1,5 @@
 import csv
-import io
+import json
 import os
 import sys
 import tkinter as tk
@@ -7,6 +7,8 @@ from tkinter import ttk, messagebox
 import subprocess
 import unicodedata
 import re
+import threading
+from datetime import datetime
 
 # 开启 Windows 高分屏缩放优化 (防止模糊)
 try:
@@ -51,8 +53,13 @@ class PhonePriceSearchApp:
         self.base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
         self.data_dir = os.path.join(self.base_dir, "data")
         os.makedirs(self.data_dir, exist_ok=True)
+        self.settings_path = os.path.join(self.base_dir, "app_settings.json")
+        self.network_enabled = self.load_network_preference()
         self.all_data = []
         self.load_errors = []
+        self.syncing = False
+        self.extra_columns = []
+        self.base_columns = None
 
         self.style = ttk.Style()
         try:
@@ -67,11 +74,53 @@ class PhonePriceSearchApp:
         self.style.map("Custom.Treeview", background=[("selected", "#0078d7")], foreground=[("selected", "white")])
         self.setup_ui()
         self.load_all_data()
+        # 联网开关开启时启动后自动同步；关闭后完全离线运行。
+        if self.network_enabled:
+            self.root.after(300, self.sync_online)
+
+    def load_network_preference(self):
+        try:
+            with open(self.settings_path, "r", encoding="utf-8") as f:
+                return bool(json.load(f).get("network_enabled", True))
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return True
+
+    def save_network_preference(self):
+        try:
+            with open(self.settings_path, "w", encoding="utf-8") as f:
+                json.dump({"network_enabled": self.network_enabled}, f, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            messagebox.showwarning("设置未保存", f"无法保存联网开关状态：\n{exc}")
+
+    def on_network_toggle(self):
+        self.network_enabled = bool(self.network_var.get())
+        self.save_network_preference()
+        if self.network_enabled:
+            self.status_label.config(text="联网已开启，正在更新报价…")
+            self.sync_online()
+        else:
+            self.sync_button.config(state=tk.DISABLED)
+            self.status_label.config(text="离线模式：仅使用本地 data 文件夹中的报价")
 
     def setup_ui(self):
         top = ttk.Frame(self.root, padding=15)
         top.pack(fill=tk.X)
         ttk.Label(top, text="🔍 搜索型号/品牌:", font=self.font_header).pack(side=tk.LEFT)
+
+        ttk.Label(top, text="报价日期:", font=self.font_header).pack(side=tk.LEFT, padx=(14, 4))
+        self.date_var = tk.StringVar(value="全部日期")
+        self.date_combo = ttk.Combobox(top, textvariable=self.date_var, state="readonly", width=13, values=["全部日期"])
+        self.date_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self.date_combo.bind("<<ComboboxSelected>>", lambda *_: self.do_search())
+
+        self.network_var = tk.BooleanVar(value=self.network_enabled)
+        self.network_toggle = ttk.Checkbutton(
+            top,
+            text="联网更新",
+            variable=self.network_var,
+            command=self.on_network_toggle,
+        )
+        self.network_toggle.pack(side=tk.LEFT, padx=(0, 8))
 
         search_frame = tk.Frame(top)
         search_frame.pack(side=tk.LEFT, padx=15)
@@ -81,13 +130,18 @@ class PhonePriceSearchApp:
         self.search_entry.pack(side=tk.LEFT, ipady=4)
         tk.Button(search_frame, text="✕", command=self.clear_search, font=("微软雅黑", 12, "bold"), relief="flat", bd=0, cursor="hand2", padx=7).pack(side=tk.LEFT)
 
-        tk.Button(top, text="🔄 刷新数据", command=self.load_all_data, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
+        self.sync_button = tk.Button(top, text="🌐 更新官网报价", command=self.sync_online, font=self.font_main, bg="#e8f3ff", padx=10)
+        self.sync_button.pack(side=tk.LEFT, padx=5)
+        if not self.network_enabled:
+            self.sync_button.config(state=tk.DISABLED)
+        tk.Button(top, text="🔄 重新加载", command=self.load_all_data, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="🗑 清空", command=self.clear_search, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="📂 打开数据夹", command=self.open_data_folder, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
         self.status_label = ttk.Label(top, text="", font=self.font_main, foreground="#666666")
         self.status_label.pack(side=tk.RIGHT)
 
         self.columns = [
+            ("date", "报价日期", 110),
             ("source", "品牌", 110),
             ("series", "系列", 150),
             ("no", "序号", 65),
@@ -102,6 +156,7 @@ class PhonePriceSearchApp:
             ("bulk", "统货", 95),
             ("remark", "备注说明", 420),
         ]
+        self.base_columns = list(self.columns)
 
         frame = ttk.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
@@ -137,6 +192,39 @@ class PhonePriceSearchApp:
                 subprocess.Popen(["xdg-open", self.data_dir])
         except Exception as e:
             messagebox.showerror("错误", f"无法打开文件夹:\n{e}")
+
+    def sync_online(self):
+        if not self.network_enabled:
+            return
+        if self.syncing:
+            return
+        self.syncing = True
+        self.sync_button.config(state=tk.DISABLED)
+        self.network_toggle.config(state=tk.DISABLED)
+        self.status_label.config(text="正在连接报价网站并更新…")
+
+        def worker():
+            try:
+                from auto_pipeline import run_pipeline
+                result = run_pipeline(lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)))
+                error = None
+            except Exception as exc:
+                result, error = None, f"{type(exc).__name__}: {exc}"
+
+            def finish():
+                self.syncing = False
+                self.sync_button.config(state=tk.NORMAL)
+                self.network_toggle.config(state=tk.NORMAL)
+                self.load_all_data()
+                if error:
+                    base = self.status_label.cget("text").split(" | 当前搜索", 1)[0]
+                    self.status_label.config(text=base + " · 联网更新失败（保留本地数据）")
+                messagebox.showwarning("联网更新失败", f"无法更新报价：\n{error}\n\n已保留本地已有数据。请检查网络后点击“更新官网报价”。")
+                else:
+                    self.status_label.config(text=f"更新完成：{result['snapshots']} 份报价 / {result['rows']} 条机型 · {datetime.now():%H:%M}")
+            self.root.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     @staticmethod
     def clean_text(value):
@@ -221,6 +309,7 @@ class PhonePriceSearchApp:
             return None
 
         return {
+            "date": self.get_field(clean_row, ["报价日期", "日期", "更新日期"], ""),
             "source": brand,
             "series": self.get_field(clean_row, self.FIELD_ALIASES["series"], brand),
             "no": self.get_field(clean_row, ["序号", "编号"], "-"),
@@ -234,6 +323,7 @@ class PhonePriceSearchApp:
             "p6": self.get_field(clean_row, self.FIELD_ALIASES["p6"], "-"),
             "bulk": self.get_field(clean_row, self.FIELD_ALIASES["bulk"], "-"),
             "remark": self.get_field(clean_row, self.FIELD_ALIASES["remark"], ""),
+            **{key: value for key, value in clean_row.items() if key not in {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "型号", "序号", "网络制式型号", "来源"}},
         }
 
     def load_all_data(self):
@@ -243,8 +333,9 @@ class PhonePriceSearchApp:
 
         try:
             csv_files = sorted(
-                os.path.join(self.data_dir, name)
-                for name in os.listdir(self.data_dir)
+                os.path.join(folder, name)
+                for folder, _subdirs, names in os.walk(self.data_dir)
+                for name in names
                 if name.lower().endswith(".csv")
             )
         except OSError as exc:
@@ -252,10 +343,13 @@ class PhonePriceSearchApp:
             self.load_errors.append(f"数据目录读取失败: {exc}")
 
         loaded_files = 0
+        all_headers = set()
         for f_path in csv_files:
-            brand = os.path.splitext(os.path.basename(f_path))[0]
+            brand = os.path.basename(os.path.dirname(f_path))
             try:
                 rows, _encoding = self.read_csv_rows(f_path)
+                for row in rows:
+                    all_headers.update(self.clean_text(key) for key in row if key)
                 file_count = 0
                 for row in rows:
                     item = self.normalize_row(row, brand)
@@ -271,7 +365,26 @@ class PhonePriceSearchApp:
                 self.load_errors.append(f"{os.path.basename(f_path)}: {type(exc).__name__}: {exc}")
                 print("⚠️", self.load_errors[-1])
 
-        status = f"已加载 {loaded_files} 个数据文件，共 {len(self.all_data)} 行数据"
+        available_dates = sorted({row.get("date", "") for row in self.all_data if row.get("date")}, reverse=True)
+        old_date = self.date_var.get()
+        date_values = ["全部日期"] + available_dates
+        self.date_combo.configure(values=date_values)
+        self.date_var.set(old_date if old_date in date_values else (available_dates[0] if available_dates else "全部日期"))
+
+        reserved = {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "分类", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
+        aliases = {self.clean_text(alias) for values in self.FIELD_ALIASES.values() for alias in values}
+        self.extra_columns = sorted((h for h in all_headers if h and h not in reserved and h not in aliases), key=str.casefold)
+        self.columns = list(self.base_columns)
+        self.tree["columns"] = [x[0] for x in self.columns]
+        for header in self.extra_columns:
+            self.columns.append((header, header, 115))
+            self.tree["columns"] = [x[0] for x in self.columns]
+            self.tree.heading(header, text=header)
+            self.tree.column(header, width=115, minwidth=70, anchor=tk.CENTER)
+
+        status = f"已加载最近报价 {loaded_files} 份，共 {len(self.all_data)} 条报价"
+        if not csv_files:
+            status = "本地 data 文件夹中尚无 CSV 报价"
         if self.load_errors:
             status += f" · {len(self.load_errors)} 个文件异常"
         self.status_label.config(text=status)
@@ -296,7 +409,10 @@ class PhonePriceSearchApp:
             self.tree.delete(item)
 
         count = 0
+        selected_date = self.date_var.get()
         for d in self.all_data:
+            if selected_date != "全部日期" and d.get("date") != selected_date:
+                continue
             searchable = self.search_key(" ".join(str(d.get(k, "")) for k, _, _ in self.columns))
             if not query or all(self.search_key(token) in searchable for token in tokens):
                 tag = "oddrow" if count % 2 == 0 else "evenrow"
@@ -304,7 +420,9 @@ class PhonePriceSearchApp:
                 count += 1
 
         base = self.status_label.cget("text").split(" | 当前搜索", 1)[0]
-        self.status_label.config(text=base + (f" | 当前搜索 {count} 行" if raw_query.strip() else ""))
+        date_text = f" | 日期 {selected_date}" if selected_date != "全部日期" else ""
+        search_text = f" | 当前搜索 {count} 行" if raw_query.strip() else ""
+        self.status_label.config(text=base + date_text + search_text)
 
 
 if __name__ == "__main__":
