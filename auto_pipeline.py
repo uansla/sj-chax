@@ -229,7 +229,6 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dic
         index = fetch_soup(session, INDEX_URL)
     finally:
         session.close()
-    session.close()
     brands = find_brand_pages(index)
     if not brands:
         raise RuntimeError("报价总览页没有找到品牌报价入口，网站页面可能已调整。")
