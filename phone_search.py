@@ -206,7 +206,7 @@ class PhonePriceSearchApp:
         def worker():
             try:
                 from auto_pipeline import run_pipeline
-                result = run_pipeline(lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)))
+                result = run_pipeline(lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)), data_dir=self.data_dir)
                 error = None
             except Exception as exc:
                 result, error = None, f"{type(exc).__name__}: {exc}"
