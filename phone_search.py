@@ -494,6 +494,7 @@ class PhonePriceSearchApp:
             pass
 
         new_files = {}
+        cache_dirty = set(old_files) != set(csv_files)
         loaded_files = 0
         all_headers = set()
         for f_path in csv_files:
@@ -514,6 +515,7 @@ class PhonePriceSearchApp:
                 headers = cached.get("headers", [])
                 file_error = cached.get("error")
             else:
+                cache_dirty = True
                 normalized_rows = []
                 headers = []
                 file_error = None
@@ -546,13 +548,15 @@ class PhonePriceSearchApp:
                 "error": file_error,
             }
 
-        try:
-            temp_cache = self.cache_path + ".tmp"
-            with open(temp_cache, "w", encoding="utf-8") as cache_file:
-                json.dump({"version": 2, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
-            os.replace(temp_cache, self.cache_path)
-        except (OSError, TypeError, ValueError) as exc:
-            print(f"⚠️ 报价缓存无法保存: {exc}")
+        cache_dirty = cache_dirty or set(new_files) != set(old_files)
+        if cache_dirty:
+            try:
+                temp_cache = self.cache_path + ".tmp"
+                with open(temp_cache, "w", encoding="utf-8") as cache_file:
+                    json.dump({"version": 2, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
+                os.replace(temp_cache, self.cache_path)
+            except (OSError, TypeError, ValueError) as exc:
+                print(f"⚠️ 报价缓存无法保存: {exc}")
 
         available_dates = sorted({row.get("date", "") for row in self.all_data if row.get("date")}, reverse=True)
         old_date = self.date_var.get()
