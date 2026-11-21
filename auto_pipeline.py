@@ -234,7 +234,12 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None) -> dict[str,
         worker_session.headers.update(HEADERS)
         try:
             articles = find_article_pages(worker_session, brand_url)
+            safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
             for quote_date, article_url in articles:
+                # 已有报价按品牌和日期保留，只抓本地缺少的快照，避免重复下载或覆盖用户文件。
+                target = output_dir / safe_brand / f"{quote_date.isoformat()}_{safe_brand}.csv"
+                if target.is_file():
+                    continue
                 try:
                     page = fetch_soup(worker_session, article_url)
                     header, raw_rows = parse_quote_table(page)
