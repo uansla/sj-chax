@@ -274,7 +274,7 @@ class PhonePriceSearchApp:
         self.base_columns = list(self.columns)
 
         self.brand_tag_container = ttk.Frame(self.root, padding=(15, 4))
-        self.brand_tag_container.pack(fill=tk.X, before=None)
+        self.brand_tag_container.pack(fill=tk.X)
         ttk.Label(self.brand_tag_container, text="品牌:", font=self.font_main).pack(side=tk.LEFT, anchor=tk.NW, padx=(0, 8))
         self.brand_tags_frame = tk.Frame(self.brand_tag_container, bg="white")
         self.brand_tags_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
