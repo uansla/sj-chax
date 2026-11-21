@@ -464,7 +464,7 @@ class PhonePriceSearchApp:
         if os.path.abspath(parent) != os.path.abspath(self.data_dir):
             return os.path.basename(parent)
         name = os.path.splitext(os.path.basename(path))[0]
-        name = re.sub(r"^20\\d{2}-\\d{2}-\\d{2}_", "", name)
+        name = re.sub(r"^20\d{2}-\d{2}-\d{2}_", "", name)
         name = re.sub(r"(?:手机)?回收价格(?:表)?$", "", name).strip(" _-")
         return name or "未知品牌"
 
