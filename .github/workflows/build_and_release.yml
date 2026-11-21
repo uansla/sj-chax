@@ -1,4 +1,4 @@
-name: Build and Publish Windows App
+name: Build and Publish Windows and Debian Apps
 
 on:
   push:
@@ -16,11 +16,8 @@ env:
   PYTHONIOENCODING: 'utf-8'
 
 jobs:
-  build-and-release:
+  build-windows:
     runs-on: windows-latest
-    permissions:
-      contents: write
-
     steps:
       - name: 检出代码
         uses: actions/checkout@v5
@@ -29,59 +26,109 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
 
-      - name: 安装打包工具
-        run: python -m pip install --upgrade pip pyinstaller requests beautifulsoup4
-
-      - name: 构建前检查
-        shell: python
+      - name: 安装依赖并检查源码
         run: |
-          import py_compile
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m py_compile phone_search.py auto_pipeline.py
 
-          py_compile.compile('phone_search.py', doraise=True)
-          py_compile.compile('auto_pipeline.py', doraise=True)
-          print('程序源码检查完成；行情数据由用户本地保存，不参与打包。')
+      - name: 打包 Windows EXE
+        run: python -m PyInstaller --clean --noconfirm -F -w --name SearchTool phone_search.py
 
-      - name: 使用 PyInstaller 打包 EXE
-        run: python -m PyInstaller --clean -F -w --name "SearchTool" phone_search.py
-
-      - name: 自动化整合发布包
+      - name: 整理 Windows 发布包
         shell: python
         run: |
           import os
           import shutil
           import zipfile
 
-          app_dir = 'Recycle_Tool_App'
-          zip_name = 'PhonePriceSearch_Windows.zip'
-
-          if os.path.exists(app_dir):
-              shutil.rmtree(app_dir)
-          if os.path.exists(zip_name):
-              os.remove(zip_name)
-
-          # 只发布软件本体；用户行情 CSV 不上传 GitHub，也不放进安装包。
+          app_dir = 'PhonePriceSearch_Windows'
+          os.makedirs(app_dir, exist_ok=True)
           shutil.copy2('dist/SearchTool.exe', os.path.join(app_dir, '手机回收价格秒查工具.exe'))
-
-          # 额外放入说明文件，避免用户不知道目录结构。
           with open(os.path.join(app_dir, '使用说明.txt'), 'w', encoding='utf-8') as f:
-              f.write(
-                  '手机回收价格秒查工具\n\n'
-                  '1. 将你自己的 data 文件夹放在“手机回收价格秒查工具.exe”同级目录。\n'
-                  '2. data 文件夹内按品牌建立子文件夹，并放入报价 CSV。\n'
-                  '3. 软件支持离线查询本地 CSV；勾选“联网更新”后会自动同步官网报价。\n'
-                  '4. 可在软件中选择报价日期，再输入手机型号搜索价格。\n'
-              )
-
-          with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+              f.write('手机回收价格秒查工具（Windows）\n\n将自己的 data 文件夹放在 EXE 同级目录。程序支持离线查询本地 CSV；勾选“联网更新”后会同步官网报价。\n')
+          with zipfile.ZipFile('PhonePriceSearch_Windows.zip', 'w', zipfile.ZIP_DEFLATED) as zf:
               for root, _, files in os.walk(app_dir):
                   for name in files:
-                      full_path = os.path.join(root, name)
-                      rel_path = os.path.relpath(full_path, app_dir)
-                      zf.write(full_path, rel_path)
+                      path = os.path.join(root, name)
+                      zf.write(path, os.path.relpath(path, app_dir))
 
-          print(f'软件发布包构建完成：{zip_name}（不含用户行情数据）。')
+      - name: 上传 Windows 构建产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: PhonePriceSearch_Windows
+          path: PhonePriceSearch_Windows.zip
+          if-no-files-found: error
+
+  build-debian:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        debian: ['12', '13']
+    container:
+      image: debian:${{ matrix.debian }}
+    steps:
+      - name: 安装系统构建依赖
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates git python3 python3-dev python3-venv python3-tk \
+            build-essential binutils libgl1 libglib2.0-0
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 安装 Python 打包依赖
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+          .venv/bin/python -m py_compile phone_search.py auto_pipeline.py
+
+      - name: 打包 Debian 可执行程序
+        run: .venv/bin/python -m PyInstaller --clean --noconfirm --onefile --name phone-price-search phone_search.py
+
+      - name: 整理 Debian 发布包
+        env:
+          DEBIAN_VERSION: ${{ matrix.debian }}
+        run: |
+          set -eu
+          app_dir="PhonePriceSearch_Debian${DEBIAN_VERSION}"
+          mkdir -p "$app_dir"
+          cp dist/phone-price-search "$app_dir/手机回收价格秒查工具"
+          chmod +x "$app_dir/手机回收价格秒查工具"
+          cat > "$app_dir/使用说明.txt" <<'EOF'
+          手机回收价格秒查工具（Debian）
+
+          1. 解压发布包，在终端进入解压目录。
+          2. 运行：./手机回收价格秒查工具
+          3. 将自己的 data 文件夹放在程序同级目录。程序支持离线查询本地 CSV；勾选“联网更新”后会同步官网报价。
+          4. 需要桌面图形会话（X11 或 Wayland/XWayland）。
+          EOF
+          archive="PhonePriceSearch_Debian${DEBIAN_VERSION}.tar.gz"
+          tar -czf "$archive" "$app_dir"
+
+      - name: 上传 Debian 构建产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: PhonePriceSearch_Debian${{ matrix.debian }}
+          path: PhonePriceSearch_Debian${{ matrix.debian }}.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    needs: [build-windows, build-debian]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v7
+        with:
+          path: release-assets
+          merge-multiple: true
 
       - name: 确定发布版本号
         id: version
@@ -92,22 +139,18 @@ jobs:
           else
             TAG="${{ github.ref_name }}"
           fi
-
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "错误：版本号必须类似 v1.2.0"
             exit 1
           fi
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "使用版本号：$TAG"
 
-      - name: 创建 GitHub Release
+      - name: 创建或更新 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
-        shell: bash
         run: |
-          gh release create "$TAG" PhonePriceSearch_Windows.zip \
+          gh release create "$TAG" release-assets/* \
             --title "手机回收报价工具 $TAG" \
-            --notes "发布包只含软件本体，不含用户行情数据。用户可将自己的 data 文件夹放在 EXE 同级目录，支持日期筛选、型号查询及联网/离线切换。" \
-            || gh release upload "$TAG" PhonePriceSearch_Windows.zip --clobber
+            --notes "提供 Windows EXE、Debian 12 和 Debian 13 版本。发布包只含软件本体，不含用户行情数据。将自己的 data 文件夹放在程序同级目录即可离线查询，也可在软件中开启联网更新。" \
+            || gh release upload "$TAG" release-assets/* --clobber
