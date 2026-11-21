@@ -56,6 +56,7 @@ class PhonePriceSearchApp:
         self.data_dir = os.path.join(self.base_dir, "data")
         os.makedirs(self.data_dir, exist_ok=True)
         self.settings_path = os.path.join(self.base_dir, "app_settings.json")
+        self.cache_path = os.path.join(self.base_dir, "price_cache.json")
         self.network_enabled, self.proxy_enabled, self.proxy_ip, self.proxy_port = self.load_preferences()
         self.all_data = []
         self.load_errors = []
@@ -262,10 +263,10 @@ class PhonePriceSearchApp:
             ("no", "序号", 65),
             ("model", "机型规格", 320),
             ("network", "网络型号", 160),
-            ("p1", "靓好", 95),
-            ("p2", "好屏", 95),
-            ("p3", "碎屏", 95),
-            ("p4", "坏配件", 95),
+            ("p1", "屏好·靓好", 95),
+            ("p2", "屏好·好屏", 95),
+            ("p3", "屏坏·碎屏", 95),
+            ("p4", "屏坏·压屏", 95),
             ("p5", "不开机", 95),
             ("p6", "废板", 95),
             ("bulk", "统货", 95),
@@ -286,7 +287,7 @@ class PhonePriceSearchApp:
         for col_id, col_name, width in self.columns:
             self.tree.heading(col_id, text=col_name)
             anchor = tk.CENTER if col_id in {"no", "network", "p1", "p2", "p3", "p4", "p5", "p6", "bulk"} else tk.W
-            self.tree.column(col_id, width=width, minwidth=45, anchor=anchor)
+            self.tree.column(col_id, width=width, minwidth=45, anchor=anchor, stretch=False)
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -474,28 +475,75 @@ class PhonePriceSearchApp:
             csv_files = []
             self.load_errors.append(f"数据目录读取失败: {exc}")
 
+        old_files = {}
+        try:
+            with open(self.cache_path, "r", encoding="utf-8") as cache_file:
+                saved_cache = json.load(cache_file)
+            if saved_cache.get("version") == 1 and isinstance(saved_cache.get("files"), dict):
+                old_files = saved_cache["files"]
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+
+        new_files = {}
         loaded_files = 0
         all_headers = set()
         for f_path in csv_files:
-            brand = os.path.basename(os.path.dirname(f_path))
             try:
-                rows, _encoding = self.read_csv_rows(f_path)
-                for row in rows:
-                    all_headers.update(self.clean_text(key) for key in row if key)
-                file_count = 0
-                for row in rows:
-                    item = self.normalize_row(row, brand)
-                    if item:
-                        self.all_data.append(item)
-                        file_count += 1
-
-                if file_count:
-                    loaded_files += 1
-                else:
-                    self.load_errors.append(f"{os.path.basename(f_path)}: 未找到有效机型数据")
-            except Exception as exc:
+                stat = os.stat(f_path)
+            except OSError as exc:
                 self.load_errors.append(f"{os.path.basename(f_path)}: {type(exc).__name__}: {exc}")
-                print("⚠️", self.load_errors[-1])
+                continue
+
+            cached = old_files.get(f_path, {})
+            unchanged = (
+                cached.get("size") == stat.st_size
+                and cached.get("mtime_ns") == stat.st_mtime_ns
+                and isinstance(cached.get("rows"), list)
+            )
+            if unchanged:
+                normalized_rows = cached.get("rows", [])
+                headers = cached.get("headers", [])
+                file_error = cached.get("error")
+            else:
+                normalized_rows = []
+                headers = []
+                file_error = None
+                try:
+                    raw_rows, _encoding = self.read_csv_rows(f_path)
+                    headers = sorted({self.clean_text(key) for row in raw_rows for key in row if key})
+                    for row in raw_rows:
+                        item = self.normalize_row(row, os.path.basename(os.path.dirname(f_path)))
+                        if item:
+                            normalized_rows.append(item)
+                    if not normalized_rows:
+                        file_error = f"{os.path.basename(f_path)}: 未找到有效机型数据"
+                except Exception as exc:
+                    file_error = f"{os.path.basename(f_path)}: {type(exc).__name__}: {exc}"
+
+            self.all_data.extend(normalized_rows)
+            all_headers.update(headers)
+            if normalized_rows:
+                loaded_files += 1
+            if file_error:
+                self.load_errors.append(file_error)
+                if not unchanged:
+                    print("⚠️", file_error)
+
+            new_files[f_path] = {
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "rows": normalized_rows,
+                "headers": headers,
+                "error": file_error,
+            }
+
+        try:
+            temp_cache = self.cache_path + ".tmp"
+            with open(temp_cache, "w", encoding="utf-8") as cache_file:
+                json.dump({"version": 1, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
+            os.replace(temp_cache, self.cache_path)
+        except (OSError, TypeError, ValueError) as exc:
+            print(f"⚠️ 报价缓存无法保存: {exc}")
 
         available_dates = sorted({row.get("date", "") for row in self.all_data if row.get("date")}, reverse=True)
         old_date = self.date_var.get()
@@ -516,7 +564,8 @@ class PhonePriceSearchApp:
             self.columns.append((header, header, 115))
             self.tree["columns"] = [x[0] for x in self.columns]
             self.tree.heading(header, text=header)
-            self.tree.column(header, width=115, minwidth=70, anchor=tk.CENTER)
+            self.tree.column(header, width=115, minwidth=45, anchor=tk.CENTER, stretch=False)
+        self.fit_columns_to_content()
 
         status = f"已加载最近报价 {loaded_files} 份，共 {len(self.all_data)} 条报价"
         if not csv_files:
@@ -530,6 +579,21 @@ class PhonePriceSearchApp:
 
         for err in self.load_errors:
             print("⚠️", err)
+
+    def fit_columns_to_content(self):
+        body_font = tkfont.Font(root=self.root, font=self.font_main)
+        heading_font = tkfont.Font(root=self.root, font=self.font_header)
+        measured = {}
+        for col_id, title, _default_width in self.columns:
+            width = heading_font.measure(title) + 22
+            for row in self.all_data:
+                value = str(row.get(col_id, "") or "")
+                if value not in measured:
+                    measured[value] = body_font.measure(value)
+                width = max(width, measured[value] + 20)
+            max_width = 360 if col_id == "remark" else 300
+            width = min(max(width, 48), max_width)
+            self.tree.column(col_id, width=width, minwidth=45, stretch=False)
 
     @classmethod
     def search_tokens(cls, value):
