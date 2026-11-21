@@ -8,6 +8,8 @@ import subprocess
 import unicodedata
 import re
 import threading
+import ipaddress
+import tkinter.font as tkfont
 from datetime import datetime
 
 # 开启 Windows 高分屏缩放优化 (防止模糊)
@@ -54,12 +56,15 @@ class PhonePriceSearchApp:
         self.data_dir = os.path.join(self.base_dir, "data")
         os.makedirs(self.data_dir, exist_ok=True)
         self.settings_path = os.path.join(self.base_dir, "app_settings.json")
-        self.network_enabled = self.load_network_preference()
+        self.network_enabled, self.proxy_enabled, self.proxy_ip, self.proxy_port = self.load_preferences()
         self.all_data = []
         self.load_errors = []
         self.syncing = False
         self.extra_columns = []
         self.base_columns = None
+        self.date_user_selected = False
+        self.selected_brand = "全部"
+        self.brand_tag_width = 0
 
         self.style = ttk.Style()
         try:
@@ -78,19 +83,129 @@ class PhonePriceSearchApp:
         if self.network_enabled:
             self.root.after(300, self.sync_online)
 
-    def load_network_preference(self):
+    def load_preferences(self):
+        defaults = {
+            "network_enabled": False,
+            "proxy_enabled": False,
+            "proxy_ip": "",
+            "proxy_port": "",
+        }
         try:
             with open(self.settings_path, "r", encoding="utf-8") as f:
-                return bool(json.load(f).get("network_enabled", True))
+                saved = json.load(f)
+            if isinstance(saved, dict):
+                defaults.update(saved)
         except (OSError, json.JSONDecodeError, AttributeError):
-            return True
+            pass
+        return (
+            bool(defaults.get("network_enabled", False)),
+            bool(defaults.get("proxy_enabled", False)),
+            str(defaults.get("proxy_ip", "") or ""),
+            str(defaults.get("proxy_port", "") or ""),
+        )
 
     def save_network_preference(self):
         try:
             with open(self.settings_path, "w", encoding="utf-8") as f:
-                json.dump({"network_enabled": self.network_enabled}, f, ensure_ascii=False, indent=2)
+                json.dump({
+                    "network_enabled": self.network_enabled,
+                    "proxy_enabled": self.proxy_enabled,
+                    "proxy_ip": self.proxy_ip,
+                    "proxy_port": self.proxy_port,
+                }, f, ensure_ascii=False, indent=2)
         except OSError as exc:
-            messagebox.showwarning("设置未保存", f"无法保存联网开关状态：\n{exc}")
+            messagebox.showwarning("设置未保存", f"无法保存设置：\n{exc}")
+
+    def open_proxy_settings(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("官网更新代理设置")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        enabled_var = tk.BooleanVar(value=self.proxy_enabled)
+        ip_var = tk.StringVar(value=self.proxy_ip)
+        port_var = tk.StringVar(value=self.proxy_port)
+
+        body = ttk.Frame(dialog, padding=16)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Checkbutton(body, text="使用 HTTP 代理", variable=enabled_var).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10)
+        )
+        ttk.Label(body, text="代理 IP：").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=4)
+        ip_entry = ttk.Entry(body, textvariable=ip_var, width=25)
+        ip_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="端口：").grid(row=2, column=0, sticky="e", padx=(0, 8), pady=4)
+        ttk.Entry(body, textvariable=port_var, width=25).grid(row=2, column=1, sticky="ew", pady=4)
+        ttk.Label(body, text="默认不使用代理，直接通过本机网络连接。").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(8, 12)
+        )
+
+        def save():
+            ip_value = ip_var.get().strip()
+            port_value = port_var.get().strip()
+            if enabled_var.get():
+                try:
+                    ipaddress.ip_address(ip_value)
+                    port_number = int(port_value)
+                    if not 1 <= port_number <= 65535:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("代理设置无效", "请输入有效的代理 IP 和 1–65535 范围内的端口。", parent=dialog)
+                    return
+            self.proxy_enabled = bool(enabled_var.get())
+            self.proxy_ip = ip_value
+            self.proxy_port = port_value
+            self.save_network_preference()
+            dialog.destroy()
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e")
+        ttk.Button(buttons, text="取消", command=dialog.destroy).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(buttons, text="保存", command=save).pack(side=tk.RIGHT)
+        ip_entry.focus_set()
+
+    def on_date_selected(self, *_):
+        self.date_user_selected = True
+        self.do_search()
+
+    def on_brand_tag_resize(self, event):
+        if event.width != self.brand_tag_width:
+            self.brand_tag_width = event.width
+            self.root.after_idle(self.render_brand_tags)
+
+    def render_brand_tags(self):
+        if not hasattr(self, "brand_tags_frame"):
+            return
+        for child in self.brand_tags_frame.winfo_children():
+            child.destroy()
+        brands = sorted({str(row.get("source", "")).strip() for row in self.all_data if row.get("source")}, key=str.casefold)
+        options = ["全部"] + brands
+        available_width = max(self.brand_tags_frame.winfo_width(), self.root.winfo_width() - 100, 400)
+        tag_font = tkfont.Font(root=self.root, font=self.font_main)
+        rows = [[]]
+        used_width = 0
+        for name in options:
+            needed = tag_font.measure(name) + 22
+            if rows[-1] and used_width + needed > available_width:
+                rows.append([])
+                used_width = 0
+            rows[-1].append(name)
+            used_width += needed
+        for row in rows:
+            row_frame = tk.Frame(self.brand_tags_frame, bg="white")
+            row_frame.pack(anchor=tk.W, fill=tk.X)
+            for name in row:
+                color = "#c0392b" if name == self.selected_brand else "#333333"
+                tag = tk.Label(row_frame, text=name, font=self.font_main, fg=color, bg="white",
+                               cursor="hand2", padx=8, pady=3)
+                tag.pack(side=tk.LEFT)
+                tag.bind("<Button-1>", lambda _event, selected=name: self.select_brand(selected))
+
+    def select_brand(self, brand):
+        self.selected_brand = brand
+        self.render_brand_tags()
+        self.do_search()
 
     def on_network_toggle(self):
         self.network_enabled = bool(self.network_var.get())
@@ -111,7 +226,7 @@ class PhonePriceSearchApp:
         self.date_var = tk.StringVar(value="全部日期")
         self.date_combo = ttk.Combobox(top, textvariable=self.date_var, state="readonly", width=13, values=["全部日期"])
         self.date_combo.pack(side=tk.LEFT, padx=(0, 12))
-        self.date_combo.bind("<<ComboboxSelected>>", lambda *_: self.do_search())
+        self.date_combo.bind("<<ComboboxSelected>>", self.on_date_selected)
 
         self.network_var = tk.BooleanVar(value=self.network_enabled)
         self.network_toggle = ttk.Checkbutton(
@@ -132,10 +247,10 @@ class PhonePriceSearchApp:
 
         self.sync_button = tk.Button(top, text="🌐 更新官网报价", command=self.sync_online, font=self.font_main, bg="#e8f3ff", padx=10)
         self.sync_button.pack(side=tk.LEFT, padx=5)
+        ttk.Button(top, text="⚙ 代理设置", command=self.open_proxy_settings).pack(side=tk.LEFT, padx=5)
         if not self.network_enabled:
             self.sync_button.config(state=tk.DISABLED)
         tk.Button(top, text="🔄 重新加载", command=self.load_all_data, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
-        tk.Button(top, text="🗑 清空", command=self.clear_search, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="📂 打开数据夹", command=self.open_data_folder, font=self.font_main, bg="#f0f0f0", padx=10).pack(side=tk.LEFT, padx=5)
         self.status_label = ttk.Label(top, text="", font=self.font_main, foreground="#666666")
         self.status_label.pack(side=tk.RIGHT)
@@ -157,6 +272,13 @@ class PhonePriceSearchApp:
             ("remark", "备注说明", 420),
         ]
         self.base_columns = list(self.columns)
+
+        self.brand_tag_container = ttk.Frame(self.root, padding=(15, 4))
+        self.brand_tag_container.pack(fill=tk.X, before=None)
+        ttk.Label(self.brand_tag_container, text="品牌:", font=self.font_main).pack(side=tk.LEFT, anchor=tk.NW, padx=(0, 8))
+        self.brand_tags_frame = tk.Frame(self.brand_tag_container, bg="white")
+        self.brand_tags_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.brand_tag_container.bind("<Configure>", self.on_brand_tag_resize)
 
         frame = ttk.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
@@ -206,7 +328,17 @@ class PhonePriceSearchApp:
         def worker():
             try:
                 from auto_pipeline import run_pipeline
-                result = run_pipeline(lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)), data_dir=self.data_dir)
+                proxies = None
+                if self.proxy_enabled:
+                    address = ipaddress.ip_address(self.proxy_ip)
+                    host = f"[{address}]" if address.version == 6 else str(address)
+                    proxy_url = f"http://{host}:{self.proxy_port}"
+                    proxies = {"http": proxy_url, "https": proxy_url}
+                result = run_pipeline(
+                    lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)),
+                    data_dir=self.data_dir,
+                    proxies=proxies,
+                )
                 error = None
             except Exception as exc:
                 result, error = None, f"{type(exc).__name__}: {exc}"
@@ -369,7 +501,11 @@ class PhonePriceSearchApp:
         old_date = self.date_var.get()
         date_values = ["全部日期"] + available_dates
         self.date_combo.configure(values=date_values)
-        self.date_var.set(old_date if old_date in date_values else (available_dates[0] if available_dates else "全部日期"))
+        if self.date_user_selected and old_date in date_values:
+            self.date_var.set(old_date)
+        else:
+            self.date_var.set(available_dates[0] if available_dates else "全部日期")
+        self.render_brand_tags()
 
         reserved = {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "分类", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
         aliases = {self.clean_text(alias) for values in self.FIELD_ALIASES.values() for alias in values}
@@ -411,6 +547,8 @@ class PhonePriceSearchApp:
         count = 0
         selected_date = self.date_var.get()
         for d in self.all_data:
+            if self.selected_brand != "全部" and d.get("source") != self.selected_brand:
+                continue
             if selected_date != "全部日期" and d.get("date") != selected_date:
                 continue
             searchable = self.search_key(" ".join(str(d.get(k, "")) for k, _, _ in self.columns))
