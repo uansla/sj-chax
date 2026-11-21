@@ -15,6 +15,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from series_classifier import infer_series
+
 BASE_URL = "https://www.smhsw.com"
 INDEX_URL = f"{BASE_URL}/home/quotation/more.html"
 ROOT = Path(__file__).resolve().parent
@@ -192,7 +194,7 @@ def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], sou
         for field in row:
             if field not in all_fields:
                 all_fields.append(field)
-    headers = ["报价日期", "系列", "型号"] + [x for x in all_fields if x != "型号"] + ["来源"]
+    headers = ["报价日期", "系列", "型号"] + [x for x in all_fields if x not in {"报价日期", "系列", "型号"}] + ["来源"]
     safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     brand_dir = output_dir / safe_brand
@@ -253,6 +255,10 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dic
                     page = fetch_soup(worker_session, article_url)
                     header, raw_rows = parse_quote_table(page)
                     rows = valid_quote_rows(header, raw_rows)
+                    for row in rows:
+                        series = (row.get("系列") or "").strip()
+                        if not series or series == brand:
+                            row["系列"] = infer_series(brand, row.get("型号", ""))
                     if not rows:
                         result["errors"] += 1
                         continue
