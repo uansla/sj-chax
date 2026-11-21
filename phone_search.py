@@ -459,6 +459,15 @@ class PhonePriceSearchApp:
             **{key: value for key, value in clean_row.items() if key not in {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "型号", "序号", "网络制式型号", "来源"}},
         }
 
+    def brand_for_csv(self, path):
+        parent = os.path.dirname(path)
+        if os.path.abspath(parent) != os.path.abspath(self.data_dir):
+            return os.path.basename(parent)
+        name = os.path.splitext(os.path.basename(path))[0]
+        name = re.sub(r"^20\\d{2}-\\d{2}-\\d{2}_", "", name)
+        name = re.sub(r"(?:手机)?回收价格(?:表)?$", "", name).strip(" _-")
+        return name or "未知品牌"
+
     def load_all_data(self):
         query = self.search_var.get()
         self.all_data.clear()
@@ -479,7 +488,7 @@ class PhonePriceSearchApp:
         try:
             with open(self.cache_path, "r", encoding="utf-8") as cache_file:
                 saved_cache = json.load(cache_file)
-            if saved_cache.get("version") == 1 and isinstance(saved_cache.get("files"), dict):
+            if saved_cache.get("version") == 2 and isinstance(saved_cache.get("files"), dict):
                 old_files = saved_cache["files"]
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
@@ -512,7 +521,7 @@ class PhonePriceSearchApp:
                     raw_rows, _encoding = self.read_csv_rows(f_path)
                     headers = sorted({self.clean_text(key) for row in raw_rows for key in row if key})
                     for row in raw_rows:
-                        item = self.normalize_row(row, os.path.basename(os.path.dirname(f_path)))
+                        item = self.normalize_row(row, self.brand_for_csv(f_path))
                         if item:
                             normalized_rows.append(item)
                     if not normalized_rows:
@@ -540,7 +549,7 @@ class PhonePriceSearchApp:
         try:
             temp_cache = self.cache_path + ".tmp"
             with open(temp_cache, "w", encoding="utf-8") as cache_file:
-                json.dump({"version": 1, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
+                json.dump({"version": 2, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
             os.replace(temp_cache, self.cache_path)
         except (OSError, TypeError, ValueError) as exc:
             print(f"⚠️ 报价缓存无法保存: {exc}")
