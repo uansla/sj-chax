@@ -28,6 +28,15 @@ MODEL_MARKERS = ("型号", "机型", "商品型号", "品名/型号")
 HISTORY_START = date(2026, 10, 1)
 
 
+def create_session(proxies: dict[str, str] | None = None) -> requests.Session:
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update(HEADERS)
+    if proxies:
+        session.proxies.update(proxies)
+    return session
+
+
 def parse_date(value: str) -> date | None:
     match = DATE_RE.search(value or "")
     if not match:
@@ -210,14 +219,16 @@ def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
     return removed
 
 
-def run_pipeline(progress=None, data_dir: Path | str | None = None) -> dict[str, int]:
+def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dict[str, str] | None = None) -> dict[str, int]:
     """下载二手手机分类下所有品牌自 2026-10-01 起的报价。"""
     report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0}
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    index = fetch_soup(session, INDEX_URL)
+    session = create_session(proxies)
+    try:
+        index = fetch_soup(session, INDEX_URL)
+    finally:
+        session.close()
     session.close()
     brands = find_brand_pages(index)
     if not brands:
@@ -230,8 +241,7 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None) -> dict[str,
         result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0}
         if progress:
             progress(f"正在更新 {brand}…")
-        worker_session = requests.Session()
-        worker_session.headers.update(HEADERS)
+        worker_session = create_session(proxies)
         try:
             articles = find_article_pages(worker_session, brand_url)
             safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
