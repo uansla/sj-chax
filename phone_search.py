@@ -263,14 +263,7 @@ class PhonePriceSearchApp:
             ("no", "序号", 65),
             ("model", "机型规格", 320),
             ("network", "网络型号", 160),
-            ("p1", "屏好价·靓好", 95),
-            ("p2", "屏好价·好屏", 95),
-            ("p3", "屏坏价·碎屏", 95),
-            ("p4", "屏坏价·压屏", 95),
-            ("p5", "不开机", 95),
-            ("p6", "废板", 95),
-            ("bulk", "统货", 95),
-            ("remark", "备注说明", 420),
+            ("remark", "备注说明", 300),
         ]
         self.base_columns = list(self.columns)
 
@@ -569,8 +562,16 @@ class PhonePriceSearchApp:
         self.render_brand_tags()
 
         reserved = {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "分类", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
-        aliases = {self.clean_text(alias) for values in self.FIELD_ALIASES.values() for alias in values}
-        self.extra_columns = sorted((h for h in all_headers if h and h not in reserved and h not in aliases), key=str.casefold)
+        non_price_aliases = {
+            self.clean_text(alias)
+            for key, values in self.FIELD_ALIASES.items()
+            if key not in {"p1", "p2", "p3", "p4", "p5", "p6", "bulk"}
+            for alias in values
+        }
+        self.extra_columns = sorted(
+            (h for h in all_headers if h and h not in reserved and h not in non_price_aliases),
+            key=str.casefold,
+        )
         self.columns = list(self.base_columns)
         self.tree["columns"] = [x[0] for x in self.columns]
         for header in self.extra_columns:
