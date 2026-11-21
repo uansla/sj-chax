@@ -12,6 +12,8 @@ import ipaddress
 import tkinter.font as tkfont
 from datetime import datetime
 
+from series_classifier import infer_series
+
 # 开启 Windows 高分屏缩放优化 (防止模糊)
 try:
     from ctypes import windll
@@ -65,7 +67,9 @@ class PhonePriceSearchApp:
         self.base_columns = None
         self.date_user_selected = False
         self.selected_brand = "全部"
+        self.selected_series = "全部"
         self.brand_tag_width = 0
+        self.series_tag_width = 0
 
         self.style = ttk.Style()
         try:
@@ -203,9 +207,55 @@ class PhonePriceSearchApp:
                 tag.pack(side=tk.LEFT)
                 tag.bind("<Button-1>", lambda _event, selected=name: self.select_brand(selected))
 
+    def on_series_tag_resize(self, event):
+        if event.width != self.series_tag_width:
+            self.series_tag_width = event.width
+            self.root.after_idle(self.render_series_tags)
+
+    def render_series_tags(self):
+        if not hasattr(self, "series_tags_frame"):
+            return
+        for child in self.series_tags_frame.winfo_children():
+            child.destroy()
+        rows = [
+            row for row in self.all_data
+            if self.selected_brand == "全部" or row.get("source") == self.selected_brand
+        ]
+        series = sorted({str(row.get("series", "")).strip() for row in rows if row.get("series")}, key=str.casefold)
+        options = ["全部"] + series
+        if self.selected_series not in options:
+            self.selected_series = "全部"
+        available_width = max(self.series_tags_frame.winfo_width(), self.root.winfo_width() - 100, 400)
+        tag_font = tkfont.Font(root=self.root, font=self.font_main)
+        tag_rows = [[]]
+        used_width = 0
+        for name in options:
+            needed = tag_font.measure(name) + 22
+            if tag_rows[-1] and used_width + needed > available_width:
+                tag_rows.append([])
+                used_width = 0
+            tag_rows[-1].append(name)
+            used_width += needed
+        for row in tag_rows:
+            row_frame = tk.Frame(self.series_tags_frame, bg="white")
+            row_frame.pack(anchor=tk.W, fill=tk.X)
+            for name in row:
+                color = "#c0392b" if name == self.selected_series else "#333333"
+                tag = tk.Label(row_frame, text=name, font=self.font_main, fg=color, bg="white",
+                               cursor="hand2", padx=8, pady=3)
+                tag.pack(side=tk.LEFT)
+                tag.bind("<Button-1>", lambda _event, selected=name: self.select_series(selected))
+
+    def select_series(self, series):
+        self.selected_series = series
+        self.render_series_tags()
+        self.do_search()
+
     def select_brand(self, brand):
         self.selected_brand = brand
+        self.selected_series = "全部"
         self.render_brand_tags()
+        self.render_series_tags()
         self.do_search()
 
     def on_network_toggle(self):
@@ -273,6 +323,13 @@ class PhonePriceSearchApp:
         self.brand_tags_frame = tk.Frame(self.brand_tag_container, bg="white")
         self.brand_tags_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.brand_tag_container.bind("<Configure>", self.on_brand_tag_resize)
+
+        self.series_tag_container = ttk.Frame(self.root, padding=(15, 2))
+        self.series_tag_container.pack(fill=tk.X)
+        ttk.Label(self.series_tag_container, text="系列:", font=self.font_main).pack(side=tk.LEFT, anchor=tk.NW, padx=(0, 8))
+        self.series_tags_frame = tk.Frame(self.series_tag_container, bg="white")
+        self.series_tags_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.series_tag_container.bind("<Configure>", self.on_series_tag_resize)
 
         frame = ttk.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=5)
@@ -434,10 +491,14 @@ class PhonePriceSearchApp:
         }:
             return None
 
+        series = self.get_field(clean_row, self.FIELD_ALIASES["series"], brand)
+        if not series or self.search_key(series) == self.search_key(brand):
+            series = infer_series(brand, model)
+
         return {
             "date": self.get_field(clean_row, ["报价日期", "日期", "更新日期"], ""),
             "source": brand,
-            "series": self.get_field(clean_row, self.FIELD_ALIASES["series"], brand),
+            "series": series,
             "no": self.get_field(clean_row, ["序号", "编号"], "-"),
             "model": model,
             "network": self.get_field(clean_row, self.FIELD_ALIASES["network"], "/"),
@@ -481,7 +542,7 @@ class PhonePriceSearchApp:
         try:
             with open(self.cache_path, "r", encoding="utf-8") as cache_file:
                 saved_cache = json.load(cache_file)
-            if saved_cache.get("version") == 2 and isinstance(saved_cache.get("files"), dict):
+            if saved_cache.get("version") == 3 and isinstance(saved_cache.get("files"), dict):
                 old_files = saved_cache["files"]
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
@@ -546,7 +607,7 @@ class PhonePriceSearchApp:
             try:
                 temp_cache = self.cache_path + ".tmp"
                 with open(temp_cache, "w", encoding="utf-8") as cache_file:
-                    json.dump({"version": 2, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
+                    json.dump({"version": 3, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
                 os.replace(temp_cache, self.cache_path)
             except (OSError, TypeError, ValueError) as exc:
                 print(f"⚠️ 报价缓存无法保存: {exc}")
@@ -560,6 +621,7 @@ class PhonePriceSearchApp:
         else:
             self.date_var.set(available_dates[0] if available_dates else "全部日期")
         self.render_brand_tags()
+        self.render_series_tags()
 
         reserved = {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "分类", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
         non_price_aliases = {
@@ -579,6 +641,8 @@ class PhonePriceSearchApp:
             self.tree["columns"] = [x[0] for x in self.columns]
             self.tree.heading(header, text=header)
             self.tree.column(header, width=115, minwidth=45, anchor=tk.CENTER, stretch=False)
+        for col_id, title, _width in self.columns:
+            self.tree.heading(col_id, text=title)
         self.fit_columns_to_content()
 
         status = f"已加载最近报价 {loaded_files} 份，共 {len(self.all_data)} 条报价"
@@ -626,6 +690,8 @@ class PhonePriceSearchApp:
         selected_date = self.date_var.get()
         for d in self.all_data:
             if self.selected_brand != "全部" and d.get("source") != self.selected_brand:
+                continue
+            if self.selected_series != "全部" and d.get("series") != self.selected_series:
                 continue
             if selected_date != "全部日期" and d.get("date") != selected_date:
                 continue
