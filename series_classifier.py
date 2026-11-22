@@ -116,7 +116,7 @@ def infer_series(brand: str, model: str) -> str:
             return "数字系列"
         return brand
 
-    if brand_key in {"真我", "realme"}:
+    if brand_key in {"真我", "真我realme", "realme"}:
         value = re.sub(r"^(?:真我|realme)\s*", "", text, flags=re.I)
         for pattern, label in ((r"gt", "GT"), (r"neo", "Neo"), (r"c\s*\d", "C"),
                                (r"q\s*\d", "Q"), (r"\d", "数字系列")):
