@@ -105,6 +105,14 @@ def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[
         visited.add(listing_url)
         soup = fetch_soup(session, listing_url)
         page_articles = find_recent_articles(soup, date.min)
+        expected_match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", base_path)
+        if expected_match:
+            expected_category = expected_match.groups()
+            page_articles = [
+                (quote_date, article_url) for quote_date, article_url in page_articles
+                if (match := re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(article_url).path))
+                and match.groups() == expected_category
+            ]
         for quote_date, article_url in page_articles:
             if quote_date >= HISTORY_START:
                 articles[article_url] = quote_date
@@ -121,8 +129,8 @@ def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[
     return sorted(((d, u) for u, d in articles.items()), reverse=True)
 
 
-def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
-    """选择包含型号表头的最大表格，跳过导航/页脚中的其他表格。"""
+def parse_quote_tables(soup: BeautifulSoup) -> list[tuple[list[str], list[list[str]]]]:
+    """Return every model/pricing table, including smaller sub-series tables."""
     candidates = []
     for table in soup.find_all("table"):
         rows = []
@@ -131,22 +139,34 @@ def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
             values = [" ".join(cell.stripped_strings).strip() for cell in cells]
             if any(values):
                 rows.append(values)
-        for index, row in enumerate(rows):
-            if any(marker in cell.replace(" ", "") for cell in row for marker in MODEL_MARKERS):
-                header = row
-                body = [r for r in rows[index + 1:] if len(r) >= 2]
-                candidates.append((len(body), header, body))
-                break
+        index = 0
+        while index < len(rows):
+            row = rows[index]
+            if not any(marker in cell.replace(" ", "") for cell in row for marker in MODEL_MARKERS):
+                index += 1
+                continue
+            header = row
+            body = []
+            index += 1
+            while index < len(rows):
+                next_row = rows[index]
+                if any(marker in cell.replace(" ", "") for cell in next_row for marker in MODEL_MARKERS):
+                    break
+                if len(next_row) >= 2:
+                    body.append(next_row)
+                index += 1
+            if body:
+                candidates.append((header, body))
     if candidates:
-        _, header, rows = max(candidates, key=lambda item: item[0])
-        return header, rows
+        return candidates
 
-    # 有些版本将报价表直接渲染为 div；保留对纯文本分隔表格的兼容。
+    # Some site versions render the quote as text instead of a table.
     text = soup.get_text("\n", strip=True)
     lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
-    header_index = next((i for i, line in enumerate(lines) if "型号" in line and re.search(r"开机|靓机|充新|靓好", line)), None)
+    header_index = next((i for i, line in enumerate(lines)
+                         if "型号" in line and re.search(r"开机|靓机|充新|靓好", line)), None)
     if header_index is None:
-        return [], []
+        return []
     split = lambda line: [x.strip() for x in re.split(r"\s*[|｜\t]\s*", line.strip(" |｜")) if x.strip()]
     header = split(lines[header_index])
     body = []
@@ -154,7 +174,17 @@ def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
         row = split(line)
         if len(row) >= 2:
             body.append(row)
-    return header, body
+    return [(header, body)]
+
+
+def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
+    """Compatibility helper for callers expecting one table."""
+    tables = parse_quote_tables(soup)
+    if not tables:
+        return [], []
+    header = tables[0][0]
+    rows = [row for section_header, section_rows in tables if section_header == header for row in section_rows]
+    return header, rows
 
 
 def clean_header(value: str, index: int) -> str:
@@ -187,27 +217,102 @@ def valid_quote_rows(header: list[str], rows: list[list[str]]) -> list[dict[str,
     return output
 
 
-def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str, data_dir: Path | str | None = None) -> Path:
-    # 每份报价保留原网站的不同报价档位，便于后续扩展展示字段。
+def normalize_name(value: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", value.casefold(), flags=re.UNICODE)
+
+
+def existing_snapshot(output_dir: Path, brand: str, quote_date: date) -> Path | None:
+    date_prefix = quote_date.isoformat()
+    wanted = normalize_name(brand)
+    for path in output_dir.rglob("*.csv"):
+        if not path.name.startswith(date_prefix):
+            continue
+        filename_brand = normalize_name(path.stem[len(date_prefix):].lstrip("_ -"))
+        parent_brand = normalize_name(path.parent.name) if path.parent != output_dir else ""
+        if filename_brand == wanted or parent_brand == wanted:
+            return path
+    return None
+
+
+def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str,
+                   data_dir: Path | str | None = None) -> tuple[Path, int]:
     all_fields = []
     for row in rows:
         for field in row:
             if field not in all_fields:
                 all_fields.append(field)
-    headers = ["报价日期", "系列", "型号"] + [x for x in all_fields if x not in {"报价日期", "系列", "型号"}] + ["来源"]
+    headers = ["报价日期", "系列", "型号"] + [
+        field for field in all_fields if field not in {"报价日期", "系列", "型号"}
+    ] + ["来源"]
     safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     brand_dir = output_dir / safe_brand
-    target = brand_dir / f"{quote_date.isoformat()}_{safe_brand}.csv"
+    target = existing_snapshot(output_dir, brand, quote_date) or (
+        brand_dir / f"{quote_date.isoformat()}_{safe_brand}.csv"
+    )
     brand_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=brand_dir, delete=False) as tmp:
-        writer = csv.DictWriter(tmp, fieldnames=headers, extrasaction="ignore")
+
+    existing_rows = []
+    existing_headers = []
+    model_header = "型号"
+    if target.is_file():
+        for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+            try:
+                with target.open("r", encoding=encoding, newline="") as handle:
+                    reader = csv.DictReader(handle)
+                    existing_headers = reader.fieldnames or []
+                    model_header = next(
+                        (name for name in existing_headers
+                         if any(marker in name.replace(" ", "") for marker in MODEL_MARKERS)),
+                        "",
+                    )
+                    existing_rows = list(reader)
+                break
+            except (UnicodeError, csv.Error, OSError):
+                existing_rows, existing_headers = [], []
+        if not model_header:
+            # Keep an unrecognized user CSV untouched.
+            target = brand_dir / f"{quote_date.isoformat()}_{safe_brand}_补充.csv"
+            existing_rows, existing_headers, model_header = [], [], "型号"
+
+    source_match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(source).path)
+    if source_match:
+        expected_category = source_match.groups()
+        existing_rows = [
+            row for row in existing_rows
+            if not (old_source := row.get("来源", ""))
+            or not (old_category := re.search(
+                r"/p_id/(\d+)/cat_id/(\d+)", urlparse(old_source).path
+            ))
+            or old_category.groups() == expected_category
+        ]
+
+    present = {normalize_name(row.get(model_header, "")) for row in existing_rows}
+    merged = list(existing_rows)
+    added = 0
+    for row in rows:
+        model_key = normalize_name(row.get("型号", ""))
+        if not model_key or model_key in present:
+            continue
+        merged.append({
+            "报价日期": quote_date.isoformat(),
+            "系列": row.get("系列") or infer_series(brand, row.get("型号", "")),
+            "来源": source,
+            **row,
+        })
+        present.add(model_key)
+        added += 1
+
+    fieldnames = list(dict.fromkeys(existing_headers + headers))
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8-sig", newline="", dir=target.parent, delete=False
+    ) as tmp:
+        writer = csv.DictWriter(tmp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        for row in rows:
-            writer.writerow({"报价日期": quote_date.isoformat(), "系列": brand, "来源": source, **row})
+        writer.writerows(merged)
         temp_path = Path(tmp.name)
     temp_path.replace(target)
-    return target
+    return target, added
 
 
 def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
@@ -223,7 +328,7 @@ def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
 
 def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dict[str, str] | None = None) -> dict[str, int]:
     """下载二手手机分类下所有品牌自 2026-10-01 起的报价。"""
-    report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0}
+    report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0, "empty_pages": 0, "added_models": 0}
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     session = create_session(proxies)
@@ -239,7 +344,7 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dic
         (output_dir / folder).mkdir(parents=True, exist_ok=True)
 
     def process_brand(brand: str, brand_url: str) -> dict[str, int]:
-        result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0}
+        result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0, "empty_pages": 0, "added_models": 0}
         if progress:
             progress(f"正在更新 {brand}…")
         worker_session = create_session(proxies)
@@ -247,24 +352,22 @@ def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dic
             articles = find_article_pages(worker_session, brand_url)
             safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
             for quote_date, article_url in articles:
-                # 已有报价按品牌和日期保留，只抓本地缺少的快照，避免重复下载或覆盖用户文件。
-                target = output_dir / safe_brand / f"{quote_date.isoformat()}_{safe_brand}.csv"
-                if target.is_file():
-                    continue
                 try:
                     page = fetch_soup(worker_session, article_url)
-                    header, raw_rows = parse_quote_table(page)
-                    rows = valid_quote_rows(header, raw_rows)
+                    rows = []
+                    for header, raw_rows in parse_quote_tables(page):
+                        rows.extend(valid_quote_rows(header, raw_rows))
                     for row in rows:
                         series = (row.get("系列") or "").strip()
                         if not series or series == brand:
                             row["系列"] = infer_series(brand, row.get("型号", ""))
                     if not rows:
-                        result["errors"] += 1
+                        result["empty_pages"] += 1
                         continue
-                    write_snapshot(brand, quote_date, rows, article_url, output_dir)
+                    _path, added = write_snapshot(brand, quote_date, rows, article_url, output_dir)
                     result["snapshots"] += 1
                     result["rows"] += len(rows)
+                    result["added_models"] += added
                     time.sleep(0.05)
                 except (requests.RequestException, ValueError, OSError):
                     result["errors"] += 1
