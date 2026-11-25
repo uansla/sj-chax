@@ -328,67 +328,96 @@ def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
     return removed
 
 
-def run_pipeline(progress=None, data_dir: Path | str | None = None, proxies: dict[str, str] | None = None) -> dict[str, int]:
-    """下载二手手机分类下所有品牌自 2026-10-01 起的报价。"""
-    report = {"brands": 0, "snapshots": 0, "rows": 0, "errors": 0, "empty_pages": 0, "added_models": 0}
+def run_pipeline(progress=None, data_dir: Path | str | None = None,
+                 proxies: dict[str, str] | None = None,
+                 categories: list[str] | None = None,
+                 selected_dates: list[str] | None = None) -> dict[str, int]:
+    """Update only requested categories and the exact manually selected dates."""
+    report = {"categories": 0, "brands": 0, "snapshots": 0, "rows": 0,
+              "errors": 0, "empty_pages": 0, "added_models": 0}
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
+    if categories is None:
+        requested_categories = ["二手手机"]
+    else:
+        requested_categories = list(dict.fromkeys(categories))
+    if not requested_categories or selected_dates == []:
+        return report
+    unknown = [name for name in requested_categories if name not in CATEGORY_PRODUCT_IDS]
+    if unknown:
+        raise ValueError(f"不支持的报价分类：{', '.join(unknown)}")
+
     session = create_session(proxies)
+    category_brands = {}
     try:
-        index = fetch_soup(session, INDEX_URL)
+        for category in requested_categories:
+            category_brands[category] = fetch_category_brands(
+                session, CATEGORY_PRODUCT_IDS[category]
+            )
     finally:
         session.close()
-    brands = find_brand_pages(index)
-    if not brands:
-        raise RuntimeError("报价总览页没有找到品牌报价入口，网站页面可能已调整。")
-    for brand, _ in brands:
-        folder = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
-        (output_dir / folder).mkdir(parents=True, exist_ok=True)
+    if not any(category_brands.values()):
+        raise RuntimeError("所选分类没有找到品牌入口，网站页面可能已调整。")
 
-    def process_brand(brand: str, brand_url: str) -> dict[str, int]:
-        result = {"brands": 1, "snapshots": 0, "rows": 0, "errors": 0, "empty_pages": 0, "added_models": 0}
+    def process_brand(category: str, brand: str, brand_url: str) -> dict[str, int]:
+        result = {"categories": 0, "brands": 1, "snapshots": 0, "rows": 0,
+                  "errors": 0, "empty_pages": 0, "added_models": 0}
         if progress:
-            progress(f"正在更新 {brand}…")
+            progress(f"正在更新 {category} / {brand}…")
         worker_session = create_session(proxies)
         try:
-            articles = find_article_pages(worker_session, brand_url)
-            safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+            articles = find_article_pages(worker_session, brand_url, selected_dates)
+            safe_category = re.sub(r'[\\/:*?"<>|]+', "_", category).strip() or "其他分类"
+            category_dir = output_dir if category == "二手手机" else output_dir / safe_category
             for quote_date, article_url in articles:
+                if selected_dates is None and existing_snapshot(category_dir, brand, quote_date):
+                    continue
                 try:
                     page = fetch_soup(worker_session, article_url)
                     rows = []
                     for header, raw_rows in parse_quote_tables(page):
                         rows.extend(valid_quote_rows(header, raw_rows))
                     for row in rows:
-                        series = (row.get("系列") or "").strip()
-                        if not series or series == brand:
-                            row["系列"] = infer_series(brand, row.get("型号", ""))
+                        row["系列"] = infer_series(brand, row.get("型号", ""))
                     if not rows:
                         result["empty_pages"] += 1
                         continue
-                    _path, added = write_snapshot(brand, quote_date, rows, article_url, output_dir)
+                    _path, added = write_snapshot(
+                        brand, quote_date, rows, article_url, output_dir, category
+                    )
                     result["snapshots"] += 1
                     result["rows"] += len(rows)
                     result["added_models"] += added
                     time.sleep(0.05)
-                except (requests.RequestException, ValueError, OSError):
+                except (requests.RequestException, ValueError, OSError) as exc:
                     result["errors"] += 1
-        except (requests.RequestException, ValueError, OSError):
+                    print(f"报价抓取失败：{category}/{brand} {quote_date} {article_url} [{type(exc).__name__}: {exc}]")
+        except (requests.RequestException, ValueError, OSError) as exc:
             result["errors"] += 1
+            print(f"品牌列表读取失败：{category}/{brand} [{type(exc).__name__}: {exc}]")
         finally:
             worker_session.close()
         return result
 
+    jobs = []
+    for category, brands in category_brands.items():
+        report["categories"] += 1
+        safe_category = re.sub(r'[\\/:*?"<>|]+', "_", category).strip() or "其他分类"
+        category_dir = output_dir if category == "二手手机" else output_dir / safe_category
+        for brand, url in brands:
+            safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+            (category_dir / safe_brand).mkdir(parents=True, exist_ok=True)
+            jobs.append((category, brand, url))
+
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(process_brand, brand, url) for brand, url in brands]
+        futures = [pool.submit(process_brand, category, brand, url)
+                   for category, brand, url in jobs]
         for future in as_completed(futures):
             result = future.result()
             for key in report:
                 report[key] += result[key]
 
-    # 保留用户自行放入 data/ 的 CSV，不清理本地文件。
     return report
-
 
 if __name__ == "__main__":
     started = datetime.now()
