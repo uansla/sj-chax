@@ -418,6 +418,11 @@ class PhonePriceSearchApp:
         return re.sub(r"\s+", " ", value).strip()
 
     @classmethod
+    def has_display_value(cls, value):
+        text = cls.clean_text(value).casefold()
+        return text not in {"", "-", "--", "—", "–", "/", "\\", "暂无", "无", "n/a", "na", "null", "none"}
+
+    @classmethod
     def search_key(cls, value):
         value = cls.clean_text(value).casefold()
         return re.sub(r"[\s_\-—–·•/\\（）()【】\[\],，.:：]+", "", value)
@@ -634,16 +639,32 @@ class PhonePriceSearchApp:
             (h for h in all_headers if h and h not in reserved and h not in non_price_aliases),
             key=str.casefold,
         )
-        self.columns = list(self.base_columns)
-        self.tree["columns"] = [x[0] for x in self.columns]
-        for header in self.extra_columns:
-            self.columns.append((header, header, 115))
-            self.tree["columns"] = [x[0] for x in self.columns]
-            self.tree.heading(header, text=header)
-            self.tree.column(header, width=115, minwidth=45, anchor=tk.CENTER, stretch=False)
-        for col_id, title, _width in self.columns:
-            self.tree.heading(col_id, text=title)
-        self.fit_columns_to_content()
+        self.available_columns_by_scope = {}
+        optional_columns = [column[0] for column in self.base_columns if column[0] not in {"date", "source", "series", "model"}]
+        candidate_columns = optional_columns + self.extra_columns
+        for row in self.all_data:
+            row_date = row.get("date") or "全部日期"
+            brand = row.get("source") or ""
+            series = row.get("series") or ""
+            populated = [
+                col_id for col_id in candidate_columns
+                if self.has_display_value(row.get(col_id, ""))
+            ]
+            if not populated:
+                continue
+            scopes = {
+                (row_date, brand, series),
+                (row_date, brand, "全部"),
+                (row_date, "全部", series),
+                (row_date, "全部", "全部"),
+                ("全部日期", brand, series),
+                ("全部日期", brand, "全部"),
+                ("全部日期", "全部", series),
+                ("全部日期", "全部", "全部"),
+            }
+            for scope in scopes:
+                self.available_columns_by_scope.setdefault(scope, set()).update(populated)
+        self.refresh_visible_columns()
 
         status = f"已加载最近报价 {loaded_files} 份，共 {len(self.all_data)} 条报价"
         if not csv_files:
@@ -657,6 +678,28 @@ class PhonePriceSearchApp:
 
         for err in self.load_errors:
             print("⚠️", err)
+
+    def refresh_visible_columns(self):
+        if not hasattr(self, "available_columns_by_scope"):
+            return
+        scope = (self.date_var.get(), self.selected_brand, self.selected_series)
+        populated = self.available_columns_by_scope.get(scope, set())
+        required = {"date", "source", "series", "model"}
+        visible = [
+            column for column in self.base_columns
+            if column[0] in required or column[0] in populated
+        ]
+        visible.extend((header, header, 115) for header in self.extra_columns if header in populated)
+        ids = [column[0] for column in visible]
+        if ids == [column[0] for column in self.columns]:
+            return
+        self.columns = visible
+        self.tree["columns"] = ids
+        for col_id, title, width in self.columns:
+            self.tree.heading(col_id, text=title)
+            anchor = tk.CENTER if col_id in {"no", "network", "p1", "p2", "p3", "p4", "p5", "p6", "bulk"} else tk.W
+            self.tree.column(col_id, width=width, minwidth=45, anchor=anchor, stretch=False)
+        self.fit_columns_to_content()
 
     def fit_columns_to_content(self):
         body_font = tkfont.Font(root=self.root, font=self.font_main)
@@ -679,6 +722,7 @@ class PhonePriceSearchApp:
         return [x for x in re.split(r"[\s,，/\\_\-—–·•（）()【】\[\].:：]+", cleaned) if x]
 
     def do_search(self):
+        self.refresh_visible_columns()
         raw_query = self.search_var.get()
         query = self.search_key(raw_query)
         tokens = self.search_tokens(raw_query)
