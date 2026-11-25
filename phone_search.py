@@ -290,7 +290,6 @@ class PhonePriceSearchApp:
         self.date_combo.configure(values=date_values)
         self.date_var.set(available_dates[0] if available_dates else "全部日期")
         self.render_category_tags()
-        self.render_category_tags()
         self.render_brand_tags()
         self.render_series_tags()
         self.do_search()
@@ -452,10 +451,15 @@ class PhonePriceSearchApp:
         shortcuts = ttk.Frame(body)
         shortcuts.pack(fill=tk.X, pady=(5,5))
         def select_recent(days=None):
-            cutoff = today - timedelta(days=days) if days else None
+            cutoff = today - timedelta(days=days) if days and days > 0 else None
             for value, variable in date_vars.items():
-                parsed = datetime.strptime(value, "%Y-%m-%d").date()
-                variable.set(cutoff is None or parsed >= cutoff)
+                if days is None:
+                    variable.set(True)
+                elif days <= 0:
+                    variable.set(False)
+                else:
+                    parsed = datetime.strptime(value, "%Y-%m-%d").date()
+                    variable.set(parsed >= cutoff)
         ttk.Button(shortcuts, text="最近7天", command=lambda: select_recent(7)).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(shortcuts, text="最近30天", command=lambda: select_recent(30)).pack(side=tk.LEFT, padx=5)
         ttk.Button(shortcuts, text="全部可选日期", command=lambda: select_recent()).pack(side=tk.LEFT, padx=5)
