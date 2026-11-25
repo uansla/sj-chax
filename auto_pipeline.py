@@ -28,7 +28,7 @@ HEADERS = {
 DATE_RE = re.compile(r"(?P<y>20\d{2})[年/-](?P<m>\d{1,2})[月/-](?P<d>\d{1,2})")
 MODEL_MARKERS = ("型号", "机型", "商品型号", "品名/型号")
 HISTORY_START = date(2026, 10, 1)
-CATEGORY_PRODUCT_IDS = {"二手手机": 1, "手机内配": 2, "杂货铺": 3, "数码相机回收报价": 999999999, "电脑回收": 2147483647, "二手平板": 4, "家电回收": 5}
+CATEGORY_PRODUCT_IDS = {"二手手机": 1, "手机配件": 2, "杂货铺": 3, "数码相机回收报价": 999999999, "电脑回收": 2147483647, "二手平板": 4, "家电回收": 5}
 
 
 def create_session(proxies: dict[str, str] | None = None) -> requests.Session:
