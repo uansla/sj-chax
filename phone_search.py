@@ -417,15 +417,97 @@ class PhonePriceSearchApp:
         except Exception as e:
             messagebox.showerror("错误", f"无法打开文件夹:\n{e}")
 
+    def choose_sync_scope(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择官网报价更新范围")
+        dialog.geometry("760x650")
+        dialog.minsize(680,560)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        result = {"categories": [], "dates": []}
+        body = ttk.Frame(dialog, padding=14)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="选择要更新的分类（可多选）", font=self.font_header).pack(anchor=tk.W)
+        category_frame = ttk.Frame(body)
+        category_frame.pack(fill=tk.X, pady=(6,12))
+        category_vars = {}
+        for index, category in enumerate(self.CATEGORY_OPTIONS):
+            variable = tk.BooleanVar(value=(category == self.selected_category))
+            category_vars[category] = variable
+            ttk.Checkbutton(category_frame, text=category, variable=variable).grid(
+                row=index // 4, column=index % 4, sticky="w", padx=(0,14), pady=3
+            )
+
+        ttk.Label(body, text="选择报价日期（未勾选的日期不会更新）", font=self.font_header).pack(anchor=tk.W)
+        today = datetime.now().date()
+        dates = {row.get("date", "") for row in self.all_data if row.get("date")}
+        dates.update((today - timedelta(days=offset)).isoformat() for offset in range(121))
+        date_values = sorted(dates, reverse=True)
+        selected_date = self.date_var.get()
+        default_date = selected_date if selected_date in date_values else (date_values[0] if date_values else "")
+        date_vars = {value: tk.BooleanVar(value=(value == default_date)) for value in date_values}
+
+        shortcuts = ttk.Frame(body)
+        shortcuts.pack(fill=tk.X, pady=(5,5))
+        def select_recent(days=None):
+            cutoff = today - timedelta(days=days) if days else None
+            for value, variable in date_vars.items():
+                parsed = datetime.strptime(value, "%Y-%m-%d").date()
+                variable.set(cutoff is None or parsed >= cutoff)
+        ttk.Button(shortcuts, text="最近7天", command=lambda: select_recent(7)).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(shortcuts, text="最近30天", command=lambda: select_recent(30)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(shortcuts, text="全部可选日期", command=lambda: select_recent()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(shortcuts, text="全不选", command=lambda: select_recent(-1)).pack(side=tk.LEFT, padx=5)
+
+        date_box = ttk.Frame(body)
+        date_box.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(date_box, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(date_box, orient=tk.VERTICAL, command=canvas.yview)
+        dates_frame = ttk.Frame(canvas)
+        window_id = canvas.create_window((0,0), window=dates_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        dates_frame.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        for index, value in enumerate(date_values):
+            ttk.Checkbutton(dates_frame, text=value, variable=date_vars[value]).grid(
+                row=index // 5, column=index % 5, sticky="w", padx=(0,12), pady=2
+            )
+        ttk.Label(body, text="只会更新所选分类中官网确实存在的所选日期；其他日期和分类不处理。",
+                  foreground="#666666").pack(anchor=tk.W, pady=(8,4))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill=tk.X, pady=(6,0))
+        def cancel():
+            result["categories"] = []
+            result["dates"] = []
+            dialog.destroy()
+        def start():
+            result["categories"] = [name for name, variable in category_vars.items() if variable.get()]
+            result["dates"] = [value for value, variable in date_vars.items() if variable.get()]
+            if not result["categories"] or not result["dates"]:
+                messagebox.showinfo("本次未更新", "请至少勾选一个分类和一个日期。", parent=dialog)
+                result["categories"] = []
+                result["dates"] = []
+            dialog.destroy()
+        ttk.Button(buttons, text="取消", command=cancel).pack(side=tk.RIGHT, padx=(8,0))
+        ttk.Button(buttons, text="开始更新", command=start).pack(side=tk.RIGHT)
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        self.root.wait_window(dialog)
+        return result["categories"], result["dates"]
+
     def sync_online(self):
-        if not self.network_enabled:
+        if not self.network_enabled or self.syncing:
             return
-        if self.syncing:
+        categories, selected_dates = self.choose_sync_scope()
+        if not categories or not selected_dates:
             return
         self.syncing = True
         self.sync_button.config(state=tk.DISABLED)
         self.network_toggle.config(state=tk.DISABLED)
-        self.status_label.config(text="正在连接报价网站并更新…")
+        self.status_label.config(text="正在按所选分类和日期更新报价…")
 
         def worker():
             try:
@@ -438,8 +520,8 @@ class PhonePriceSearchApp:
                     proxies = {"http": proxy_url, "https": proxy_url}
                 result = run_pipeline(
                     lambda message: self.root.after(0, lambda m=message: self.status_label.config(text=m)),
-                    data_dir=self.data_dir,
-                    proxies=proxies,
+                    data_dir=self.data_dir, proxies=proxies,
+                    categories=categories, selected_dates=selected_dates,
                 )
                 error = None
             except Exception as exc:
@@ -453,13 +535,12 @@ class PhonePriceSearchApp:
                 if error:
                     base = self.status_label.cget("text").split(" | 当前搜索", 1)[0]
                     self.status_label.config(text=base + " · 联网更新失败（保留本地数据）")
-                    messagebox.showwarning("联网更新失败", f"无法更新报价：\n{error}\n\n已保留本地已有数据。请检查网络后点击“更新官网报价”。")
+                    messagebox.showwarning("联网更新失败", f"无法更新报价：\n{error}\n\n已保留本地已有数据。请检查网络后重试。")
                 else:
-                    self.status_label.config(text=f"更新完成：{result['snapshots']} 份报价 / {result['rows']} 条机型 · {datetime.now():%H:%M}")
+                    self.status_label.config(text=f"更新完成：{result['categories']} 个分类，{result['snapshots']} 份报价 / {result['rows']} 条机型 · {datetime.now():%H:%M}")
             self.root.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
-
     @staticmethod
     def clean_text(value):
         if value is None:
