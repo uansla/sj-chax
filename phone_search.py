@@ -557,7 +557,7 @@ class PhonePriceSearchApp:
     @classmethod
     def has_display_value(cls, value):
         text = cls.clean_text(value).casefold()
-        return text not in {"", "-", "--", "—", "–", "/", "\\", "暂无", "无", "n/a", "na", "null", "none"}
+        return text not in {"", "-", "--", "—", "–", "/", "\\", "*", "＊", "※", "暂无", "无", "n/a", "na", "null", "none"}
 
     @classmethod
     def search_key(cls, value):
@@ -788,7 +788,8 @@ class PhonePriceSearchApp:
             for alias in values
         }
         self.extra_columns = sorted(
-            (h for h in all_headers if h and h not in reserved and h not in non_price_aliases),
+            (h for h in all_headers if h and h not in reserved and h not in non_price_aliases
+             and not re.fullmatch(r"报价项\\d+", h)),
             key=str.casefold,
         )
         self.available_columns_by_scope = {}
@@ -822,10 +823,24 @@ class PhonePriceSearchApp:
             print("⚠️", err)
 
     def refresh_visible_columns(self):
-        if not hasattr(self, "available_columns_by_scope"):
+        if not hasattr(self, "all_data") or not hasattr(self, "tree"):
             return
-        scope = (self.date_var.get(), self.selected_category)
-        populated = self.available_columns_by_scope.get(scope, set())
+        selected_date = self.date_var.get()
+        matching_rows = [
+            row for row in self.all_data
+            if row.get("category", "二手手机") == self.selected_category
+            and (selected_date == "全部日期" or row.get("date") == selected_date)
+            and (self.selected_brand == "全部" or row.get("source") == self.selected_brand)
+            and (self.selected_series == "全部" or row.get("series") == self.selected_series)
+        ]
+        candidate_columns = [
+            column[0] for column in self.base_columns
+            if column[0] not in {"date", "source", "series", "model"}
+        ] + self.extra_columns
+        populated = {
+            col_id for col_id in candidate_columns
+            if any(self.has_display_value(row.get(col_id, "")) for row in matching_rows)
+        }
         required = {"date", "source", "series", "model"}
         visible = [
             column for column in self.base_columns
