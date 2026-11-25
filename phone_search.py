@@ -10,7 +10,7 @@ import re
 import threading
 import ipaddress
 import tkinter.font as tkfont
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from series_classifier import infer_series
 
@@ -34,8 +34,11 @@ class PhonePriceSearchApp:
     6. “oppo A5”这类多词搜索采用 AND 匹配
     """
 
+    CATEGORY_OPTIONS = ("二手手机", "手机内配", "杂货铺", "数码相机回收报价", "电脑回收", "二手平板", "家电回收")
+
     FIELD_ALIASES = {
-        "series": ["系列", "品牌/系列", "系列分类", "分类"],
+        "category": ["分类", "品类", "商品分类"],
+        "series": ["系列", "品牌/系列", "系列分类"],
         "model": ["型号", "机型及配置", "机型与配置", "机型及规格", "机型与规格", "机型规格", "机型", "品名/型号"],
         "p1": ["开机靓好", "开机靓机好", "靓好", "开机屏好", "开机屏好(无ID)", "开机屏好(元)"],
         "p2": ["开机好屏", "开机好碎", "开机屏好碎壳", "开机屏好外屏碎", "开机外屏碎", "好屏", "好碎"],
@@ -66,8 +69,10 @@ class PhonePriceSearchApp:
         self.extra_columns = []
         self.base_columns = None
         self.date_user_selected = False
+        self.selected_category = "二手手机"
         self.selected_brand = "oppo"
         self.selected_series = "全部"
+        self.category_tag_width = 0
         self.brand_tag_width = 0
         self.series_tag_width = 0
 
@@ -84,9 +89,8 @@ class PhonePriceSearchApp:
         self.style.map("Custom.Treeview", background=[("selected", "#0078d7")], foreground=[("selected", "white")])
         self.setup_ui()
         self.load_all_data()
-        # 联网开关开启时启动后自动同步；关闭后完全离线运行。
         if self.network_enabled:
-            self.root.after(300, self.sync_online)
+            self.status_label.config(text="联网更新已开启；点击更新按钮选择分类和日期")
 
     def load_preferences(self):
         defaults = {
@@ -174,6 +178,23 @@ class PhonePriceSearchApp:
         self.date_user_selected = True
         self.do_search()
 
+    def on_category_tag_resize(self, event):
+        if event.width != self.category_tag_width:
+            self.category_tag_width = event.width
+            self.root.after_idle(self.render_category_tags)
+
+    def render_category_tags(self):
+        if not hasattr(self, "category_tags_frame"):
+            return
+        for child in self.category_tags_frame.winfo_children():
+            child.destroy()
+        for name in self.CATEGORY_OPTIONS:
+            color = "#c0392b" if name == self.selected_category else "#333333"
+            tag = tk.Label(self.category_tags_frame, text=name, font=self.font_main, fg=color,
+                           bg="white", cursor="hand2", padx=8, pady=3)
+            tag.pack(side=tk.LEFT)
+            tag.bind("<Button-1>", lambda _event, selected=name: self.select_category(selected))
+
     def on_brand_tag_resize(self, event):
         if event.width != self.brand_tag_width:
             self.brand_tag_width = event.width
@@ -184,7 +205,10 @@ class PhonePriceSearchApp:
             return
         for child in self.brand_tags_frame.winfo_children():
             child.destroy()
-        brands = sorted({str(row.get("source", "")).strip() for row in self.all_data if row.get("source")}, key=str.casefold)
+        brands = sorted({
+            str(row.get("source", "")).strip() for row in self.all_data
+            if row.get("source") and row.get("category", "二手手机") == self.selected_category
+        }, key=str.casefold)
         options = ["全部"] + brands
         available_width = max(self.brand_tags_frame.winfo_width(), self.root.winfo_width() - 100, 400)
         tag_font = tkfont.Font(root=self.root, font=self.font_main)
@@ -206,7 +230,6 @@ class PhonePriceSearchApp:
                                cursor="hand2", padx=8, pady=3)
                 tag.pack(side=tk.LEFT)
                 tag.bind("<Button-1>", lambda _event, selected=name: self.select_brand(selected))
-
     def on_series_tag_resize(self, event):
         if event.width != self.series_tag_width:
             self.series_tag_width = event.width
@@ -219,7 +242,8 @@ class PhonePriceSearchApp:
             child.destroy()
         rows = [
             row for row in self.all_data
-            if self.selected_brand == "全部" or row.get("source") == self.selected_brand
+            if row.get("category", "二手手机") == self.selected_category
+            and (self.selected_brand == "全部" or row.get("source") == self.selected_brand)
         ]
         series = sorted({str(row.get("series", "")).strip() for row in rows if row.get("series")}, key=str.casefold)
         options = ["全部"] + series
@@ -251,6 +275,25 @@ class PhonePriceSearchApp:
         self.render_series_tags()
         self.do_search()
 
+    def select_category(self, category):
+        if category not in self.CATEGORY_OPTIONS:
+            return
+        self.selected_category = category
+        self.selected_brand = "oppo" if category == "二手手机" else "全部"
+        self.selected_series = "全部"
+        self.date_user_selected = False
+        available_dates = sorted({
+            row.get("date", "") for row in self.all_data
+            if row.get("date") and row.get("category", "二手手机") == category
+        }, reverse=True)
+        date_values = ["全部日期"] + available_dates
+        self.date_combo.configure(values=date_values)
+        self.date_var.set(available_dates[0] if available_dates else "全部日期")
+        self.render_category_tags()
+        self.render_brand_tags()
+        self.render_series_tags()
+        self.do_search()
+
     def select_brand(self, brand):
         self.selected_brand = brand
         self.selected_series = "全部"
@@ -262,7 +305,7 @@ class PhonePriceSearchApp:
         self.network_enabled = bool(self.network_var.get())
         self.save_network_preference()
         if self.network_enabled:
-            self.status_label.config(text="联网已开启，正在更新报价…")
+            self.status_label.config(text="联网已开启，请选择更新分类和日期")
             self.sync_online()
         else:
             self.sync_button.config(state=tk.DISABLED)
@@ -316,6 +359,13 @@ class PhonePriceSearchApp:
             ("remark", "备注说明", 300),
         ]
         self.base_columns = list(self.columns)
+
+        self.category_tag_container = ttk.Frame(self.root, padding=(15, 2))
+        self.category_tag_container.pack(fill=tk.X)
+        ttk.Label(self.category_tag_container, text="分类:", font=self.font_main).pack(side=tk.LEFT, anchor=tk.NW, padx=(0, 8))
+        self.category_tags_frame = tk.Frame(self.category_tag_container, bg="white")
+        self.category_tags_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.category_tag_container.bind("<Configure>", self.on_category_tag_resize)
 
         self.brand_tag_container = ttk.Frame(self.root, padding=(15, 4))
         self.brand_tag_container.pack(fill=tk.X)
