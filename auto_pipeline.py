@@ -64,7 +64,7 @@ def find_brand_pages(soup: BeautifulSoup, product_id: int = 1) -> list[tuple[str
         href = urljoin(BASE_URL, anchor["href"])
         if "/home/quotation/more/" not in urlparse(href).path:
             continue
-        match = re.search(r"/p_id/(\\d+)/cat_id/(\\d+)", urlparse(href).path)
+        match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(href).path)
         if not match or match.group(1) != str(product_id) or match.group(2) == "0":
             continue
         brand = " ".join(anchor.get_text(" ", strip=True).split())
@@ -260,8 +260,8 @@ def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], sou
     headers = ["报价日期", "分类", "系列", "型号"] + [
         field for field in all_fields if field not in {"报价日期", "分类", "系列", "型号"}
     ] + ["来源"]
-    safe_brand = re.sub(r'[\\\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
-    safe_category = re.sub(r'[\\\\/:*?"<>|]+', "_", category).strip() or "其他分类"
+    safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+    safe_category = re.sub(r'[\\/:*?"<>|]+', "_", category).strip() or "其他分类"
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
     category_dir = output_dir if category == "二手手机" else output_dir / safe_category
     brand_dir = category_dir / safe_brand
