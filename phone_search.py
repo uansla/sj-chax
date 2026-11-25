@@ -290,6 +290,7 @@ class PhonePriceSearchApp:
         self.date_combo.configure(values=date_values)
         self.date_var.set(available_dates[0] if available_dates else "全部日期")
         self.render_category_tags()
+        self.render_category_tags()
         self.render_brand_tags()
         self.render_series_tags()
         self.do_search()
@@ -536,7 +537,7 @@ class PhonePriceSearchApp:
                 last_error = exc
         raise last_error or ValueError("无法读取 CSV 文件")
 
-    def normalize_row(self, row, brand):
+    def normalize_row(self, row, brand, default_category="二手手机"):
         clean_row = {self.clean_text(k): self.clean_text(v) for k, v in row.items() if k is not None}
         model = self.get_field(clean_row, self.FIELD_ALIASES["model"], "")
 
@@ -549,9 +550,11 @@ class PhonePriceSearchApp:
         series = self.get_field(clean_row, self.FIELD_ALIASES["series"], brand)
         if not series or self.search_key(series) == self.search_key(brand):
             series = infer_series(brand, model)
+        category = self.get_field(clean_row, self.FIELD_ALIASES["category"], default_category)
 
         return {
             "date": self.get_field(clean_row, ["报价日期", "日期", "更新日期"], ""),
+            "category": category,
             "source": brand,
             "series": series,
             "no": self.get_field(clean_row, ["序号", "编号"], "-"),
@@ -565,7 +568,7 @@ class PhonePriceSearchApp:
             "p6": self.get_field(clean_row, self.FIELD_ALIASES["p6"], "-"),
             "bulk": self.get_field(clean_row, self.FIELD_ALIASES["bulk"], "-"),
             "remark": self.get_field(clean_row, self.FIELD_ALIASES["remark"], ""),
-            **{key: value for key, value in clean_row.items() if key not in {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "型号", "序号", "网络制式型号", "来源"}},
+            **{key: value for key, value in clean_row.items() if key not in {"报价日期", "日期", "更新日期", "分类", "品类", "商品分类", "系列", "品牌/系列", "型号", "序号", "网络制式型号", "来源"}},
         }
 
     def brand_for_csv(self, path):
@@ -576,6 +579,16 @@ class PhonePriceSearchApp:
         name = re.sub(r"^20\d{2}-\d{2}-\d{2}_", "", name)
         name = re.sub(r"(?:手机)?回收价格(?:表)?$", "", name).strip(" _-")
         return name or "未知品牌"
+
+    def category_for_csv(self, path):
+        try:
+            relative = os.path.relpath(path, self.data_dir)
+            parts = relative.split(os.sep)
+            if len(parts) >= 3 and parts[0] in self.CATEGORY_OPTIONS:
+                return parts[0]
+        except ValueError:
+            pass
+        return "二手手机"
 
     def load_all_data(self):
         query = self.search_var.get()
@@ -597,7 +610,7 @@ class PhonePriceSearchApp:
         try:
             with open(self.cache_path, "r", encoding="utf-8") as cache_file:
                 saved_cache = json.load(cache_file)
-            if saved_cache.get("version") == 3 and isinstance(saved_cache.get("files"), dict):
+            if saved_cache.get("version") == 4 and isinstance(saved_cache.get("files"), dict):
                 old_files = saved_cache["files"]
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
@@ -632,7 +645,7 @@ class PhonePriceSearchApp:
                     raw_rows, _encoding = self.read_csv_rows(f_path)
                     headers = sorted({self.clean_text(key) for row in raw_rows for key in row if key})
                     for row in raw_rows:
-                        item = self.normalize_row(row, self.brand_for_csv(f_path))
+                        item = self.normalize_row(row, self.brand_for_csv(f_path), self.category_for_csv(f_path))
                         if item:
                             normalized_rows.append(item)
                     if not normalized_rows:
@@ -662,12 +675,15 @@ class PhonePriceSearchApp:
             try:
                 temp_cache = self.cache_path + ".tmp"
                 with open(temp_cache, "w", encoding="utf-8") as cache_file:
-                    json.dump({"version": 3, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
+                    json.dump({"version": 4, "files": new_files}, cache_file, ensure_ascii=False, separators=(",", ":"))
                 os.replace(temp_cache, self.cache_path)
             except (OSError, TypeError, ValueError) as exc:
                 print(f"⚠️ 报价缓存无法保存: {exc}")
 
-        available_dates = sorted({row.get("date", "") for row in self.all_data if row.get("date")}, reverse=True)
+        available_dates = sorted({
+            row.get("date", "") for row in self.all_data
+            if row.get("date") and row.get("category", "二手手机") == self.selected_category
+        }, reverse=True)
         old_date = self.date_var.get()
         date_values = ["全部日期"] + available_dates
         self.date_combo.configure(values=date_values)
@@ -678,7 +694,7 @@ class PhonePriceSearchApp:
         self.render_brand_tags()
         self.render_series_tags()
 
-        reserved = {"报价日期", "日期", "更新日期", "系列", "品牌/系列", "分类", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
+        reserved = {"报价日期", "日期", "更新日期", "分类", "品类", "商品分类", "系列", "品牌/系列", "型号", "机型", "序号", "网络制式型号", "来源", "备注"}
         non_price_aliases = {
             self.clean_text(alias)
             for key, values in self.FIELD_ALIASES.items()
@@ -694,25 +710,15 @@ class PhonePriceSearchApp:
         candidate_columns = optional_columns + self.extra_columns
         for row in self.all_data:
             row_date = row.get("date") or "全部日期"
-            brand = row.get("source") or ""
-            series = row.get("series") or ""
+            category = row.get("category", "二手手机")
             populated = [
                 col_id for col_id in candidate_columns
                 if self.has_display_value(row.get(col_id, ""))
             ]
             if not populated:
                 continue
-            scopes = {
-                (row_date, brand, series),
-                (row_date, brand, "全部"),
-                (row_date, "全部", series),
-                (row_date, "全部", "全部"),
-                ("全部日期", brand, series),
-                ("全部日期", brand, "全部"),
-                ("全部日期", "全部", series),
-                ("全部日期", "全部", "全部"),
-            }
-            for scope in scopes:
+            for scope in {(row_date, category), (row_date, "全部"),
+                          ("全部日期", category), ("全部日期", "全部")}:
                 self.available_columns_by_scope.setdefault(scope, set()).update(populated)
         self.refresh_visible_columns()
 
@@ -732,7 +738,7 @@ class PhonePriceSearchApp:
     def refresh_visible_columns(self):
         if not hasattr(self, "available_columns_by_scope"):
             return
-        scope = (self.date_var.get(), self.selected_brand, self.selected_series)
+        scope = (self.date_var.get(), self.selected_category)
         populated = self.available_columns_by_scope.get(scope, set())
         required = {"date", "source", "series", "model"}
         visible = [
@@ -783,6 +789,8 @@ class PhonePriceSearchApp:
         count = 0
         selected_date = self.date_var.get()
         for d in self.all_data:
+            if d.get("category", "二手手机") != self.selected_category:
+                continue
             if self.selected_brand != "全部" and d.get("source") != self.selected_brand:
                 continue
             if self.selected_series != "全部" and d.get("series") != self.selected_series:
