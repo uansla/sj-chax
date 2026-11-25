@@ -66,7 +66,7 @@ class PhonePriceSearchApp:
         self.extra_columns = []
         self.base_columns = None
         self.date_user_selected = False
-        self.selected_brand = "全部"
+        self.selected_brand = "oppo"
         self.selected_series = "全部"
         self.brand_tag_width = 0
         self.series_tag_width = 0
