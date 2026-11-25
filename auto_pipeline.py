@@ -96,9 +96,23 @@ def find_recent_articles(soup: BeautifulSoup, start_date: date = HISTORY_START) 
     return sorted(((d, u) for u, d in by_url.items()), reverse=True)
 
 
-def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[date, str]]:
-    """读取品牌报价列表及其分页，直到历史日期早于采集起点。"""
+def find_article_pages(session: requests.Session, brand_url: str,
+                       selected_dates: list[str] | None = None) -> list[tuple[date, str]]:
+    """Return explicitly selected dates, or discover the current category's available articles."""
     base_path = urlparse(brand_url).path.rstrip("/")
+    expected = re.search(r"/p_id/([0-9]+)/cat_id/([0-9]+)", base_path)
+    if selected_dates is not None:
+        if not expected:
+            return []
+        product_id, category_id = expected.groups()
+        selected = []
+        for value in selected_dates:
+            quote_date = parse_date(value)
+            if quote_date:
+                url = (f"{BASE_URL}/home/quotation/index/p_id/{product_id}/cat_id/"
+                       f"{category_id}/date/{quote_date.isoformat()}.html")
+                selected.append((quote_date, url))
+        return selected
     pending = [brand_url]
     visited = set()
     articles = {}
@@ -109,12 +123,11 @@ def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[
         visited.add(listing_url)
         soup = fetch_soup(session, listing_url)
         page_articles = find_recent_articles(soup, date.min)
-        expected_match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", base_path)
-        if expected_match:
-            expected_category = expected_match.groups()
+        if expected:
+            expected_category = expected.groups()
             page_articles = [
                 (quote_date, article_url) for quote_date, article_url in page_articles
-                if (match := re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(article_url).path))
+                if (match := re.search(r"/p_id/([0-9]+)/cat_id/([0-9]+)", urlparse(article_url).path))
                 and match.groups() == expected_category
             ]
         for quote_date, article_url in page_articles:
@@ -127,11 +140,9 @@ def find_article_pages(session: requests.Session, brand_url: str) -> list[tuple[
             href = urljoin(BASE_URL, anchor["href"])
             path = urlparse(href).path.rstrip("/")
             if path.startswith(base_path) and href not in visited and href not in pending and href != brand_url:
-                # 限制在本品牌列表的分页链接，避免递归到其他品牌/详情页。
                 if "/home/quotation/index/" not in path:
                     pending.append(href)
-    return sorted(((d, u) for u, d in articles.items()), reverse=True)
-
+    return sorted(((quote_date, article_url) for article_url, quote_date in articles.items()), reverse=True)
 
 def parse_quote_tables(soup: BeautifulSoup) -> list[tuple[list[str], list[list[str]]]]:
     """Return every model/pricing table, including smaller sub-series tables."""
@@ -239,23 +250,25 @@ def existing_snapshot(output_dir: Path, brand: str, quote_date: date) -> Path | 
 
 
 def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], source: str,
-                   data_dir: Path | str | None = None) -> tuple[Path, int]:
+                   data_dir: Path | str | None = None,
+                   category: str = "二手手机") -> tuple[Path, int]:
     all_fields = []
     for row in rows:
         for field in row:
             if field not in all_fields:
                 all_fields.append(field)
-    headers = ["报价日期", "系列", "型号"] + [
-        field for field in all_fields if field not in {"报价日期", "系列", "型号"}
+    headers = ["报价日期", "分类", "系列", "型号"] + [
+        field for field in all_fields if field not in {"报价日期", "分类", "系列", "型号"}
     ] + ["来源"]
-    safe_brand = re.sub(r'[\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+    safe_brand = re.sub(r'[\\\\/:*?"<>|]+', "_", brand).strip() or "未知品牌"
+    safe_category = re.sub(r'[\\\\/:*?"<>|]+', "_", category).strip() or "其他分类"
     output_dir = Path(data_dir) if data_dir is not None else DATA_DIR
-    brand_dir = output_dir / safe_brand
-    target = existing_snapshot(output_dir, brand, quote_date) or (
+    category_dir = output_dir if category == "二手手机" else output_dir / safe_category
+    brand_dir = category_dir / safe_brand
+    target = existing_snapshot(category_dir, brand, quote_date) or (
         brand_dir / f"{quote_date.isoformat()}_{safe_brand}.csv"
     )
     brand_dir.mkdir(parents=True, exist_ok=True)
-
     existing_rows = []
     existing_headers = []
     model_header = "型号"
@@ -265,32 +278,24 @@ def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], sou
                 with target.open("r", encoding=encoding, newline="") as handle:
                     reader = csv.DictReader(handle)
                     existing_headers = reader.fieldnames or []
-                    model_header = next(
-                        (name for name in existing_headers
-                         if any(marker in name.replace(" ", "") for marker in MODEL_MARKERS)),
-                        "",
-                    )
+                    model_header = next((name for name in existing_headers
+                                         if any(marker in name.replace(" ", "") for marker in MODEL_MARKERS)), "")
                     existing_rows = list(reader)
                 break
             except (UnicodeError, csv.Error, OSError):
                 existing_rows, existing_headers = [], []
         if not model_header:
-            # Keep an unrecognized user CSV untouched.
             target = brand_dir / f"{quote_date.isoformat()}_{safe_brand}_补充.csv"
             existing_rows, existing_headers, model_header = [], [], "型号"
-
-    source_match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(source).path)
+    source_match = re.search(r"/p_id/([0-9]+)/cat_id/([0-9]+)", urlparse(source).path)
     if source_match:
         expected_category = source_match.groups()
         existing_rows = [
             row for row in existing_rows
             if not (old_source := row.get("来源", ""))
-            or not (old_category := re.search(
-                r"/p_id/(\d+)/cat_id/(\d+)", urlparse(old_source).path
-            ))
+            or not (old_category := re.search(r"/p_id/([0-9]+)/cat_id/([0-9]+)", urlparse(old_source).path))
             or old_category.groups() == expected_category
         ]
-
     present = {normalize_name(row.get(model_header, "")) for row in existing_rows}
     merged = list(existing_rows)
     added = 0
@@ -298,26 +303,19 @@ def write_snapshot(brand: str, quote_date: date, rows: list[dict[str, str]], sou
         model_key = normalize_name(row.get("型号", ""))
         if not model_key or model_key in present:
             continue
-        merged.append({
-            "报价日期": quote_date.isoformat(),
-            "系列": row.get("系列") or infer_series(brand, row.get("型号", "")),
-            "来源": source,
-            **row,
-        })
+        merged.append({"报价日期": quote_date.isoformat(), "分类": category,
+                       "系列": row.get("系列") or infer_series(brand, row.get("型号", "")),
+                       "来源": source, **row})
         present.add(model_key)
         added += 1
-
     fieldnames = list(dict.fromkeys(existing_headers + headers))
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8-sig", newline="", dir=target.parent, delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=target.parent, delete=False) as tmp:
         writer = csv.DictWriter(tmp, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(merged)
         temp_path = Path(tmp.name)
     temp_path.replace(target)
     return target, added
-
 
 def prune_old_snapshots(start_date: date = HISTORY_START) -> int:
     files = list(DATA_DIR.rglob("????-??-??_*.csv"))
