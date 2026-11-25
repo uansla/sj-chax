@@ -306,6 +306,7 @@ class PhonePriceSearchApp:
         self.network_enabled = bool(self.network_var.get())
         self.save_network_preference()
         if self.network_enabled:
+            self.sync_button.config(state=tk.NORMAL)
             self.status_label.config(text="联网已开启，请选择更新分类和日期")
             self.sync_online()
         else:
@@ -445,7 +446,7 @@ class PhonePriceSearchApp:
         dates.update((today - timedelta(days=offset)).isoformat() for offset in range(121))
         date_values = sorted(dates, reverse=True)
         selected_date = self.date_var.get()
-        default_date = selected_date if selected_date in date_values else (date_values[0] if date_values else "")
+        default_date = selected_date if self.date_user_selected and selected_date in date_values else today.isoformat()
         date_vars = {value: tk.BooleanVar(value=(value == default_date)) for value in date_values}
 
         shortcuts = ttk.Frame(body)
