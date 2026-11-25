@@ -203,8 +203,8 @@ def parse_quote_table(soup: BeautifulSoup) -> tuple[list[str], list[list[str]]]:
 
 
 def clean_header(value: str, index: int) -> str:
-    value = re.sub(r"\s+", "", value).strip("*|｜")
-    return value or f"报价项{index}"
+    # 空白表头不是有效报价项，避免把序号占位列写成“报价项N”。
+    return re.sub(r"\s+", "", value).strip("*|｜")
 
 
 def valid_quote_rows(header: list[str], rows: list[list[str]]) -> list[dict[str, str]]:
@@ -224,7 +224,7 @@ def valid_quote_rows(header: list[str], rows: list[list[str]]) -> list[dict[str,
             if i == model_index:
                 continue
             label = headers[i]
-            if label in ("型号", "序号"):
+            if not label or label in ("型号", "序号") or re.fullmatch(r"报价项\\d+", label):
                 continue
             record[label] = value.strip()
         if any(re.search(r"\d", value) for key, value in record.items() if key != "型号"):
