@@ -34,7 +34,7 @@ class PhonePriceSearchApp:
     6. “oppo A5”这类多词搜索采用 AND 匹配
     """
 
-    CATEGORY_OPTIONS = ("二手手机", "手机内配", "杂货铺", "数码相机回收报价", "电脑回收", "二手平板", "家电回收")
+    CATEGORY_OPTIONS = ("二手手机", "手机配件", "杂货铺", "数码相机回收报价", "电脑回收", "二手平板", "家电回收")
 
     FIELD_ALIASES = {
         "category": ["分类", "品类", "商品分类"],
