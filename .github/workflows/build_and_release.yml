@@ -9,7 +9,7 @@ on:
       version_tag:
         description: '发布版本号，例如 v1.2.0'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.2.0'
 
 env:
   PYTHONUTF8: '1'
@@ -136,11 +136,15 @@ jobs:
       - name: 确定发布版本号
         id: version
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION_TAG: ${{ inputs.version_tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.version_tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="${INPUT_VERSION_TAG:-v1.2.0}"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$REF_NAME"
           fi
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "错误：版本号必须类似 v1.2.0"
