@@ -28,6 +28,7 @@ HEADERS = {
 DATE_RE = re.compile(r"(?P<y>20\d{2})[年/-](?P<m>\d{1,2})[月/-](?P<d>\d{1,2})")
 MODEL_MARKERS = ("型号", "机型", "商品型号", "品名/型号")
 HISTORY_START = date(2026, 10, 1)
+CATEGORY_PRODUCT_IDS = {"二手手机": 1, "手机内配": 2, "杂货铺": 3, "数码相机回收报价": 999999999, "电脑回收": 2147483647, "二手平板": 4, "家电回收": 5}
 
 
 def create_session(proxies: dict[str, str] | None = None) -> requests.Session:
@@ -56,26 +57,29 @@ def fetch_soup(session: requests.Session, url: str) -> BeautifulSoup:
     return BeautifulSoup(response.text, "html.parser")
 
 
-def find_brand_pages(soup: BeautifulSoup) -> list[tuple[str, str]]:
+def find_brand_pages(soup: BeautifulSoup, product_id: int = 1) -> list[tuple[str, str]]:
     found = []
     seen = set()
     for anchor in soup.find_all("a", href=True):
         href = urljoin(BASE_URL, anchor["href"])
         if "/home/quotation/more/" not in urlparse(href).path:
             continue
-        match = re.search(r"/p_id/(\d+)/cat_id/(\d+)", urlparse(href).path)
-        # 用户指定只抓“二手手机”下的品牌；其品牌入口均为 p_id=1 且 cat_id>0。
-        if not match or match.group(1) != "1" or match.group(2) == "0":
+        match = re.search(r"/p_id/(\\d+)/cat_id/(\\d+)", urlparse(href).path)
+        if not match or match.group(1) != str(product_id) or match.group(2) == "0":
             continue
         brand = " ".join(anchor.get_text(" ", strip=True).split())
         if not brand or brand in {"更多", "下一页", "上一页"}:
             continue
-        key = (brand, href.rstrip("/"))
+        key = href.rstrip("/")
         if key not in seen:
             seen.add(key)
             found.append((brand, href))
     return found
 
+
+def fetch_category_brands(session: requests.Session, product_id: int) -> list[tuple[str, str]]:
+    index_url = INDEX_URL if product_id == 1 else f"{BASE_URL}/home/quotation/more/p_id/{product_id}/cat_id/0"
+    return find_brand_pages(fetch_soup(session, index_url), product_id)
 
 def find_recent_articles(soup: BeautifulSoup, start_date: date = HISTORY_START) -> list[tuple[date, str]]:
     by_url = {}
